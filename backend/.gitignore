@@ -1,0 +1,7 @@
+__pycache__/
+.env
+data/rag-objects/
+log/
+static/media/
+*.log
+celerybeat-schedule.*
