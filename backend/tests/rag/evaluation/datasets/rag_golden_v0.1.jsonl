@@ -1,0 +1,2 @@
+{"case_id":"golden-001","question":"索引配置记录什么信息？","category":"fact","knowledge_base_ids":[1],"relevant_chunk_ids":[101],"relevance":{"101":2},"expected_citation_chunk_ids":[101],"expected_abstain":false,"review_status":"approved"}
+{"case_id":"golden-002","question":"资料未提及的功能能否确认？","category":"abstention","knowledge_base_ids":[1],"relevant_chunk_ids":[],"relevance":{},"expected_citation_chunk_ids":[],"expected_abstain":true,"review_status":"approved"}

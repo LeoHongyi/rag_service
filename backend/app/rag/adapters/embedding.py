@@ -20,7 +20,7 @@ class EmbeddingProvider:
             'encoding_format': 'float',
         }
         headers = {'Authorization': f'Bearer {settings.RAG_EMBEDDING_API_KEY}'}
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=settings.RAG_EMBEDDING_TIMEOUT_SECONDS) as client:
             response = await client.post(f'{settings.RAG_EMBEDDING_BASE_URL}/embeddings', json=payload, headers=headers)
             response.raise_for_status()
         data = sorted(response.json()['data'], key=lambda item: item.get('index', 0))

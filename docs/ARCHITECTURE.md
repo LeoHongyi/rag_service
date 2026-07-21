@@ -6,6 +6,29 @@
 
 第一阶段只建设 RAG 核心，不迁移通用聊天、支付、图片生成、工单或前端功能。
 
+## 架构文档使用边界
+
+本文是技术决策、边界和契约的权威说明，同时会标注目标态。表格中标为 `implemented` 的内容已进入代码，但未必已有完整验证；只有 `verified` 才表示存在可重复证据。当前工作现场、未验证项和下一步以仓库根目录的 `session-handoff.md` 为准。若代码、迁移或配置与本文冲突，修改实现的一轮工作必须同步本文，或在交接文档中明确记录偏差与修复计划。
+
+## 当前实现与目标架构
+
+本文同时记录已验证基线和目标架构。除非条目标记为 `implemented` 或 `verified`，否则不能视为代码现状。
+
+| 能力 | 状态 | 当前实现 |
+|---|---|---|
+| FBA API、JWT、知识库和文档管理 | `verified` | 本地端到端调用通过 |
+| Celery 异步索引 | `verified` | Redis Broker，TXT/Markdown/DOCX；文本型 PDF Parser 已实现并通过本地解析冒烟，完整上传到索引的端到端验证待补 |
+| 索引任务可靠性 | `verified` | 当前版本行锁抢占、错误分类、有限指数退避、晚确认和超时恢复已实现；Service/CRUD PostgreSQL 与真实 Worker/Beat 故障恢复均已验证 |
+| Embedding 与 Chat | `verified` | DashScope `text-embedding-v4` 1024 维、`qwen-plus` |
+| 混合检索 | `verified` | pgvector 候选、PostgreSQL FTS 候选、应用层 RRF |
+| HNSW | `implemented` | 初始迁移已创建 cosine HNSW；参数与 filtered recall 未基准测试 |
+| Agentic RAG | `implemented` | 单节点 LangGraph，只记录一次有界检索，不包含拆解、证据评分和修复 |
+| 父子切片、中文分词、Rerank | `planned` | Model/配置有预留，业务链路尚未实现 |
+| Outbox 与删除补偿 | `implemented` | 文档创建/重试/删除在同一事务写入事件；删除先置为 `DELETING`，Worker 清理对象和切片，Beat 重投递未完成删除 |
+| S3/MinIO | `planned` | 当前使用本地文件系统 |
+| 离线质量门禁 | `implemented` | JSONL Schema、真实 Service 执行器、确定性指标、版本化阈值、Golden 报告和 GitHub Actions；领域数据仍待人工审批 |
+| Late Chunking、Late Interaction、GraphRAG | `research` | 评测触发，不进入默认方案 |
+
 ## 技术栈
 
 - Python 3.11+
@@ -25,6 +48,7 @@
 - HTTPX
 - jieba 或等价的固定版本中文分词器
 - python-docx
+- pypdf（仅文本型 PDF 解析）
 - Pytest、pytest-asyncio、Ruff
 - Docker Compose
 
@@ -41,6 +65,9 @@
 - 简单问题优先走确定性的基础 RAG；Agentic 路径只处理模糊、多跳或证据不足的问题。
 - Agent 只能调用固定的只读检索工具，所有循环由图和预算硬性终止。
 - 先构建可重复的评测基线，再决定上下文化、重排和 Agent 策略是否默认启用。
+- 每个 feature 先定义测试矩阵、质量阈值和回滚条件，再进入实现。
+- 索引产物必须可追溯到 Parser、Chunker、Tokenizer、Embedding 模型、维度和指令版本。
+- 以最小高信号上下文为目标，不把扩大 `top_k` 或增加 Agent 轮次当作默认优化手段。
 
 ## 系统边界
 
@@ -240,21 +267,49 @@ backend/
 
 第一版只记录诊断所需的最小元数据：用户、知识库 ID 列表、请求模式、实际路由、检索轮数、工具调用次数、候选/命中数量、模型名、Token 用量、估算成本、各节点耗时、停止原因、状态和 Trace ID。默认不保存完整问题、完整上下文或完整答案。
 
+### 目标索引版本模型
+
+当前 `index_version` 仍只是整数，但 P0 已增加不可变 `rag_index_profile`，文档以 `index_profile_id` 关联其实际索引配置。快照当前记录：
+
+- Parser 名称与版本
+- Chunker 名称、大小、重叠和结构策略
+- Tokenizer 与中文分词版本
+- Embedding provider、model、dimension 和 query/document instruction
+- FTS 配置与停用词版本
+- 当前 FTS 配置；HNSW 参数与评测基线 ID 仍待 P1 补充
+
+后续文档只允许查询当前激活版本。新版本完成索引和评测后再原子切换，失败时保留上一版本。
+
+### Outbox 投递边界
+
+```text
+上传/重试 Service 的数据库事务
+  -> rag_document(PENDING) + rag_index_profile + rag_outbox_event(PENDING)
+  -> COMMIT
+  -> Celery Beat / rag_dispatch_outbox
+  -> index_document(document_id, index_version)
+```
+
+这消除了“数据库回滚但已发送消息”的双写窗口。Dispatcher 用 `FOR UPDATE SKIP LOCKED` 锁定待投递事件，投递失败保留为 `FAILED` 并在下一轮重试；索引任务拒绝过期的 `index_version`。索引 Worker 已有有限指数退避，Dispatcher 仍缺少最大重试、退避、租约与死信告警，因此不能把它描述为完整的生产级任务平台。
+
 ## 文档状态机
 
 ```text
 PENDING -> PROCESSING -> READY
-              |
-              -> FAILED -> PENDING（手动重试）
+   ^          |
+   |          -> FAILED -> PENDING（手动重试并增加 index_version）
+   +---------- 临时错误有限自动重试 / 超时恢复（保持当前 index_version）
 
 PENDING / PROCESSING / READY / FAILED -> DELETING -> 删除完成
 ```
 
 - 创建文档记录与上传对象成功后才派发任务。
-- Worker 通过原子条件更新从 `PENDING` 抢占为 `PROCESSING`。
+- Worker 在短事务中用行锁校验当前 `index_version`，只允许 `PENDING` 抢占为 `PROCESSING`。
 - Worker 写入新版本切片后，在同一事务内更新文档状态和统计。
 - 失败时记录截断、脱敏后的错误摘要。
-- 重试增加 `index_version`；旧任务结果不得覆盖新版本。
+- 临时网络、429 或可恢复 5xx 在有限次数内回到 `PENDING`；永久错误或重试耗尽进入 `FAILED`。
+- 超过 `RAG_INDEX_STALE_SECONDS` 的 `PENDING` / `PROCESSING` 由定期修复任务重新投递，查询使用 `FOR UPDATE SKIP LOCKED` 避免修复器相互争抢。
+- 用户手动重试会增加 `index_version`；旧任务结果不得覆盖新版本。
 
 ## 文档处理流程
 
@@ -262,7 +317,7 @@ PENDING / PROCESSING / READY / FAILED -> DELETING -> 删除完成
 2. Service 计算 SHA-256，检查同知识库重复文件。
 3. Storage Adapter 保存原始文件。
 4. Service 创建 `PENDING` 文档并派发 Celery 任务。
-5. Worker 读取对象，使用对应 Parser 提取文本。
+5. Worker 读取对象，使用对应 Parser 提取文本；PDF 使用 `pypdf`，拒绝加密、超页数或无可提取文本的文件。
 6. Parser 输出文档结构，Chunker 生成父章节与用于召回的子切片。
 7. Context Builder 由文件名、标题路径和父级摘要生成确定性的上下文前缀。
 8. 分词器为原文和上下文文本生成固定版本的 `search_text` 与 `tsvector`。
@@ -293,7 +348,28 @@ PENDING / PROCESSING / READY / FAILED -> DELETING -> 删除完成
 - 按单文档上限、相邻切片去重和最低得分过滤后，对命中的子切片扩展父章节或相邻窗口。
 - 最终上下文按相关性与来源多样性编排，不简单塞入尽可能多的切片。
 
-生产数据量达到需要近似索引的阈值后，再通过迁移增加 HNSW 或 IVFFlat。启用近似索引前后必须用精确检索作为真值测量 Recall@K，并验证带权限过滤条件时的召回下降。
+当前迁移已经创建 HNSW。下一步必须用精确检索作为真值测量 Recall@K，并验证权限过滤后的召回下降。pgvector 0.8+ 支持 iterative index scan，查询事务应按评测结果设置 `hnsw.iterative_scan`、`hnsw.ef_search` 和扫描上限。高选择性知识库过滤还需要 B-tree 复合索引；不能假设 HNSW 与权限条件天然返回足够候选。
+
+### 2026 目标检索流水线
+
+```text
+query normalization
+  -> authorization scope
+  -> dense + lexical candidates
+  -> iterative ANN recall guard
+  -> RRF deduplication
+  -> optional qwen3-rerank
+  -> source diversity + parent/window expansion
+  -> token-aware context packing
+  -> generation
+  -> deterministic citation validation
+```
+
+升级顺序固定为：先评测数据，再结构感知解析与父子切片，再中文词法检索，再 Rerank，最后才扩展 Agent。每一层保留开关和回退路径。
+
+`contextual_content` 同时进入向量和词法索引。上下文优先来自标题路径、文档元数据和父章节；LLM 生成的 chunk context 只能作为离线评测后的可选策略。Anthropic 的 Contextual Retrieval 实验说明该组合可能降低召回失败率，但项目必须在自己的中文数据集上复现收益。
+
+最终 Context Builder 使用 Token 预算、来源多样性和父子去重。它不按固定 `top_k` 把全部候选拼接到 Prompt。运行时 Agent 采用 progressive disclosure，只通过只读 ID 加载必要父级或相邻内容。
 
 ## Agentic RAG 设计
 
@@ -515,6 +591,9 @@ RAG_EMBEDDING_DIMENSIONS=1024
 RAG_CHUNK_SIZE=600
 RAG_CHUNK_OVERLAP=80
 RAG_EMBEDDING_BATCH_SIZE=10
+RAG_INDEX_MAX_RETRIES=3
+RAG_INDEX_RETRY_BACKOFF_MAX_SECONDS=60
+RAG_INDEX_STALE_SECONDS=900
 RAG_MAX_FILE_SIZE=20971520
 RAG_RETRIEVAL_TOP_K=5
 RAG_RETRIEVAL_MIN_SCORE=0.25
@@ -549,7 +628,9 @@ RAG_EVAL_DATASET_PATH=backend/tests/fixtures/rag_eval.jsonl
 - 解析错误、空文档、格式不支持属于永久错误，不自动重试。
 - 连接超时、429 和可恢复的 5xx 使用指数退避和有限次数重试。
 - 任务以 `document_id + index_version` 作为幂等键。
-- Worker 崩溃导致长期停留在 `PROCESSING` 的任务由定期修复任务标记失败或重新排队。
+- 索引任务启用 late acknowledgement；任务进程丢失时请求 Broker 重投递。
+- Worker 崩溃导致长期停留在 `PENDING` / `PROCESSING` 的当前版本由定期修复任务恢复为 `PENDING` 并重新投递。
+- 数据库与外部供应商异常先回滚索引事务，再由独立事务写入重试或失败状态，避免提交半成品切片。
 
 ## 缓存
 
@@ -595,6 +676,22 @@ RAG_EVAL_DATASET_PATH=backend/tests/fixtures/rag_eval.jsonl
 
 ## 测试策略
 
+测试是 feature 的交付物，不是开发完成后的补充。每个 PR 或本地 feature 迭代必须附带：验收条件、受影响层、测试矩阵、执行命令、结果摘要、评测数据集版本和回滚方式。
+
+测试金字塔按确定性从下到上执行：
+
+```text
+static checks
+  -> unit tests
+  -> Service/CRUD tests
+  -> API and permission integration tests
+  -> PostgreSQL/Redis/Celery contract tests
+  -> offline RAG evaluation
+  -> small end-to-end smoke test
+```
+
+代码断言负责 Schema、权限、状态机、幂等、引用映射、预算和数据库副作用。LLM-as-judge 只评估语义正确性、相关性与 groundedness，并固定 Judge 模型、Prompt 和重复次数。
+
 ### 单元测试
 
 - 文本清洗、段落切分、重叠和边界输入。
@@ -613,6 +710,8 @@ RAG_EVAL_DATASET_PATH=backend/tests/fixtures/rag_eval.jsonl
 - 检索只命中授权且 `READY` 的文档。
 - 混合检索的授权过滤在稠密和关键词两路都生效。
 - `auto` 简单问题走基础路径，复杂问题升级且不会超过预算。
+- 事务提交失败时不投递不可恢复任务，或 Outbox 能在恢复后重放。
+- 同一 Celery 消息重复投递不会产生重复有效切片或错误统计。
 
 ### API 集成测试
 
@@ -628,10 +727,15 @@ RAG_EVAL_DATASET_PATH=backend/tests/fixtures/rag_eval.jsonl
 - PostgreSQL + pgvector 实际距离查询。
 - Alembic 空库升级和至少一次降级验证。
 - Redis、Celery Worker 和 MinIO 的 Docker Compose 冒烟测试。
+- HNSW 与精确检索对比测试，覆盖知识库权限过滤、不同候选数和 iterative scan 参数。
+- DashScope Contract Test 只在显式集成测试环境运行，不在普通单元测试中消耗真实额度。
+- Celery 故障注入使用独立 Redis DB、临时业务数据和受控本地模型端点；测试专用 Beat 使用隔离的持久调度文件，只加载代码内 `beat_schedule`，避免现有数据库定时任务污染故障轨迹。生产仍使用 FBA `DatabaseScheduler`。
 
 ### 离线质量评测
 
-- 评测集使用版本化 JSONL，至少包含问题、参考答案、相关来源、问题类型和期望路由。
+- `backend/app/rag/evaluation` 已实现版本化 JSONL 的 loader、运行结果契约、报告生成器和确定性指标；`backend/tests/rag/evaluation/datasets/rag_seed_v0.1.jsonl` 的 50 条记录是待人工审核队列。
+- `rag_golden_v0.1` 是用于 CI 验证评测管道的合成 Golden fixture，不代表业务质量。
+- 只有所有样本 `review_status=approved`，`--require-approved` 才会允许生成可比较的业务基线报告。
 - 检索：Recall@K、MRR/nDCG、Context Precision、Context Recall。
 - 生成：Faithfulness/groundedness、Answer Relevancy、正确性和拒答准确率。
 - 引用：Citation Precision、Citation Recall 和无效引用率。
@@ -640,9 +744,21 @@ RAG_EVAL_DATASET_PATH=backend/tests/fixtures/rag_eval.jsonl
 - 每次变更同时运行 `basic` 和 `agentic`；只有复杂问题质量收益达到项目门槛且简单问题不发生明显回退时，才可更改默认路由。
 - LLM Judge 固定模型与 Prompt 版本，关键发布抽样人工复核，避免把自动评分当作绝对真值。
 
+### Feature 合并门禁
+
+最低门禁如下：
+
+- Ruff、格式检查和类型检查通过
+- 新增/修改分支达到测试覆盖，Bug 修复包含复现测试
+- Alembic 升级与降级通过
+- 权限和提示注入回归集通过
+- 检索或 Prompt 变更没有突破已批准的质量回退阈值
+- P95、Token 或估算成本超出预算时必须停止合并或获得显式 ADR 批准
+- 测试结果写入 `session-handoff.md`，失败项不能标记为 `verified`
+
 ## 本地运行与部署
 
-Docker Compose 提供 PostgreSQL/pgvector、Redis 和 MinIO。API 与 Worker 可本地运行，也可通过不同 `SERVER_TYPE` 镜像启动。
+当前 `docker-compose.infra.yml` 提供 PostgreSQL/pgvector 和 Redis，API 与 Worker 在宿主机运行。MinIO 和完整容器化 API/Worker 属于目标部署，尚未验证。
 
 正式部署至少包含：
 
@@ -693,11 +809,37 @@ RAG 是本产品的核心能力，与主仓库共同演进，因此放在 `backe
 
 GraphRAG 适合跨文档全局主题和实体关系推理，但索引成本、数据模型和运维复杂度显著更高。第一版先用混合检索与有界多查询覆盖主要问题类型，只有评测显示全局/关系问题存在稳定缺口时再立项。
 
+### ADR-010：Feature 必须通过质量门禁
+
+RAG 结果具有非确定性，HTTP 200 不能代表 feature 正确。每次 feature 迭代必须同时验证确定性行为、离线质量、性能和成本。生产失败样本经过脱敏后进入固定回归集。
+
+### ADR-011：先建立结构化文档中间表示
+
+Parser 不直接输出无结构字符串。目标 Parser 输出标题、段落、表格、页码、位置和 provenance，Chunker 只消费统一中间表示。Docling 等工具通过 Adapter 试验，不能把解析器细节泄漏到 Service。
+
+### ADR-012：索引配置不可变且可追溯
+
+Embedding 模型、维度、指令、切分器和词法配置共同定义向量空间。每次改变都创建新索引版本，并通过评测后原子切换。禁止在同一激活索引中混合不同模型生成的向量。
+
+### ADR-013：Filtered ANN 需要召回保障
+
+知识库权限过滤会降低近似向量索引的有效候选数。使用 pgvector iterative scan、过滤列索引和精确检索基准共同控制召回，参数由数据规模和评测确定。
+
+### ADR-014：高级检索由错误分析触发
+
+Late Chunking、ColBERT、GraphRAG 和多模态解析保留为研究项。只有当前流水线在对应问题类型上出现稳定错误，并且候选方案通过质量、延迟、成本和运维评估时才立项。
+
 ## 实践依据
 
-- LangChain 官方将 RAG 区分为固定两阶段、Agentic 与 Hybrid，并在 Agentic RAG 示例中采用检索相关性分级和查询改写：<https://docs.langchain.com/oss/python/langgraph/agentic-rag>
-- Anthropic Contextual Retrieval 展示了上下文化切片、关键词与向量混合召回、重排组合的收益，同时强调按具体数据权衡延迟和成本：<https://www.anthropic.com/engineering/contextual-retrieval>
-- pgvector 官方建议与 PostgreSQL 全文检索组合，并可使用 RRF 或 Cross-Encoder 融合结果；近似索引需要监控相对精确检索的召回：<https://github.com/pgvector/pgvector>
-- Microsoft GraphRAG 区分 Basic、Local、Global 和 DRIFT 查询，说明图检索适用于特定的全局和关系问题，而不是基础 RAG 的无条件替代：<https://microsoft.github.io/graphrag/query/overview/>
-- Ragas 当前指标覆盖 Context Precision/Recall、Faithfulness、Tool Call Accuracy 和 Agent Goal Accuracy，可用于分离诊断检索、生成与 Agent 行为：<https://docs.ragas.io/en/stable/concepts/metrics/available_metrics/>
-- OWASP Agentic Applications 风险材料明确将 RAG 文档中的隐藏指令视为间接提示注入攻击面：<https://genai.owasp.org/download/52117/>
+- [Anthropic Contextual Retrieval](https://www.anthropic.com/engineering/contextual-retrieval)：上下文化 Embedding、词法检索、融合与 Rerank 的组合实验。
+- [Anthropic context engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)：最小高信号上下文、运行时按需检索与 progressive disclosure。
+- [pgvector 官方文档](https://github.com/pgvector/pgvector)：HNSW、过滤列索引、精确检索基线和 0.8+ iterative index scan。
+- [Qwen3 Embedding 技术说明](https://qwenlm.github.io/blog/qwen3-embedding/) 与 [DashScope 向量/Rerank 模型](https://help.aliyun.com/zh/model-studio/embedding-rerank-model/)：Embedding、指令感知检索和 `qwen3-rerank` 候选。
+- [LangGraph Agentic RAG](https://langchain-ai.github.io/langgraph/tutorials/rag/langgraph_self_rag/)：文档相关性分级、查询改写和显式状态转移。
+- [LangSmith RAG evaluation](https://docs.langchain.com/langsmith/evaluate-rag-tutorial)：正确性、相关性、groundedness 和 retrieval relevance 的分层评测。
+- [RAGChecker](https://arxiv.org/abs/2408.08067)：分离诊断检索与生成模块的细粒度指标。
+- [RAG evaluation survey 2025](https://arxiv.org/abs/2504.14891)：质量、安全和效率评测分类。
+- [Docling structured document model](https://docling-project.github.io/docling/concepts/docling_document/)：结构、布局、表格与 provenance 中间表示。
+- [Late Chunking](https://arxiv.org/abs/2409.04701) 与 [ColBERTv2](https://arxiv.org/abs/2112.01488)：只作为上下文丢失或细粒度匹配失败后的研究候选。
+- [Microsoft GraphRAG](https://microsoft.github.io/graphrag/)：Basic、Local、Global 和 DRIFT 查询适用于特定全局/关系问题。
+- [OWASP LLM01:2025 Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/) 与 [OWASP Agentic Top 10 2026](https://genai.owasp.org/download/52117/)：间接提示注入、目标劫持、工具滥用、权限与上下文投毒。

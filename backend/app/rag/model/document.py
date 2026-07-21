@@ -26,3 +26,6 @@ class Document(Base):
     error_message: Mapped[str | None] = mapped_column(sa.String(512), default=None, comment='失败摘要')
     chunk_count: Mapped[int] = mapped_column(default=0, comment='切片数量')
     index_version: Mapped[int] = mapped_column(default=1, comment='索引版本')
+    index_profile_id: Mapped[int | None] = mapped_column(
+        sa.BigInteger, default=None, index=True, comment='索引配置快照 ID'
+    )

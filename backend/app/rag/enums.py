@@ -13,3 +13,11 @@ class QueryMode(StrEnum):
     BASIC = 'basic'
     AGENTIC = 'agentic'
     AUTO = 'auto'
+
+
+class OutboxStatus(StrEnum):
+    """Outbox 事件状态。"""
+
+    PENDING = 'PENDING'
+    DISPATCHED = 'DISPATCHED'
+    FAILED = 'FAILED'

@@ -74,7 +74,7 @@ uv run alembic upgrade head
 cd ..
 ```
 
-## 5. 启动 API 与 Worker
+## 5. 启动 API、Worker 与 Beat
 
 分别开两个终端，都位于项目根目录：
 
@@ -84,6 +84,12 @@ uv run fba run --host 127.0.0.1 --port 8000 --no-reload
 
 ```bash
 uv run fba celery worker --log-level info
+```
+
+P0 使用事务 Outbox 投递文档索引任务，因此还必须启动 Beat；它每 5 秒将已提交事件发送给 Worker：
+
+```bash
+uv run fba celery beat --log-level info
 ```
 
 注意：`fba run` 必须在项目根目录运行；在 `backend/` 目录运行会造成模块路径解析错误。
@@ -131,7 +137,7 @@ uv run pytest --confcutdir=backend/tests/rag \
 
 ### 文档一直是 `PENDING`
 
-确认 Celery Worker 正在运行，并观察 Worker 日志是否收到 `rag_index_document`。同时检查 Redis：
+确认 Celery Worker 与 Beat 都正在运行。先观察 Beat 日志中的 `rag_dispatch_outbox`，再观察 Worker 日志中的 `rag_index_document`。同时检查 Redis：
 
 ```bash
 docker exec rag_redis redis-cli -n 1 LLEN celery

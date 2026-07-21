@@ -1,0 +1,68 @@
+name: RAG Quality Gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: fba_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fba_ci"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      ENVIRONMENT: dev
+      DATABASE_TYPE: postgresql
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: 5432
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: postgres
+      DATABASE_SCHEMA: fba_ci
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ''
+      REDIS_DATABASE: 0
+      TOKEN_SECRET_KEY: ci-only-not-a-production-secret
+      CELERY_BROKER_REDIS_DATABASE: 1
+      CELERY_RABBITMQ_HOST: 127.0.0.1
+      CELERY_RABBITMQ_PORT: 5672
+      CELERY_RABBITMQ_USERNAME: guest
+      CELERY_RABBITMQ_PASSWORD: guest
+      OAUTH2_GITHUB_CLIENT_ID: test
+      OAUTH2_GITHUB_CLIENT_SECRET: test
+      OAUTH2_GOOGLE_CLIENT_ID: test
+      OAUTH2_GOOGLE_CLIENT_SECRET: test
+      EMAIL_USERNAME: ''
+      EMAIL_PASSWORD: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: uv sync --group dev --group lint
+      - run: uv run ruff check backend/app/rag backend/tests/rag backend/app/task/tasks/rag backend/app/task/tasks/beat.py backend/core/conf.py backend/alembic/versions/20260714_0002_rag_reliability_baseline.py backend/scripts/evaluate_rag.py backend/scripts/run_rag_service_evaluation.py backend/scripts/run_rag_pdf_e2e_smoke.py backend/scripts/run_rag_celery_fault_injection.py backend/scripts/diagnose_embedding_batches.py
+      - run: uv run ruff format --check backend/app/rag backend/tests/rag backend/app/task/tasks/rag backend/app/task/tasks/beat.py backend/core/conf.py backend/alembic/versions/20260714_0002_rag_reliability_baseline.py backend/scripts/evaluate_rag.py backend/scripts/run_rag_service_evaluation.py backend/scripts/run_rag_pdf_e2e_smoke.py backend/scripts/run_rag_celery_fault_injection.py backend/scripts/diagnose_embedding_batches.py
+      - run: uv run mypy backend/app/rag backend/app/task/tasks/rag backend/app/task/tasks/beat.py backend/core/conf.py
+      - run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest --confcutdir=backend/tests/rag backend/tests/rag -q
+      - run: cd backend && uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head
+      - run: uv run python backend/scripts/evaluate_rag.py --dataset backend/tests/rag/evaluation/datasets/rag_golden_v0.1.jsonl --results backend/tests/rag/evaluation/results/rag_golden_v0.1.jsonl --output artifacts/rag-evaluation.json --require-approved --thresholds backend/tests/rag/evaluation/thresholds/rag_golden_v0.1.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rag-evaluation
+          path: artifacts/rag-evaluation.json

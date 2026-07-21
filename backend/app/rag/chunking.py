@@ -21,7 +21,7 @@ def split_text(text: str, *, chunk_size: int, overlap: int) -> list[str]:
                 chunks.append(current)
                 current = ''
             step = max(chunk_size - overlap, 1)
-            chunks.extend(paragraph[index:index + chunk_size] for index in range(0, len(paragraph), step))
+            chunks.extend(paragraph[index : index + chunk_size] for index in range(0, len(paragraph), step))
             continue
         candidate = f'{current}\n\n{paragraph}'.strip()
         if len(candidate) <= chunk_size:

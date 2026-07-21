@@ -17,7 +17,9 @@ class ChatProvider:
         headers = {'Authorization': f'Bearer {settings.RAG_CHAT_API_KEY}'}
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
-                f'{settings.RAG_CHAT_BASE_URL}/chat/completions', json={'model': settings.RAG_CHAT_MODEL, 'messages': messages, 'temperature': 0.1}, headers=headers
+                f'{settings.RAG_CHAT_BASE_URL}/chat/completions',
+                json={'model': settings.RAG_CHAT_MODEL, 'messages': messages, 'temperature': 0.1},
+                headers=headers,
             )
             response.raise_for_status()
         return response.json()['choices'][0]['message']['content'].strip()

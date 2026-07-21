@@ -2,192 +2,249 @@
 
 ## 当前目标
 
-基于 FastAPI Best Architecture（FBA）从零建设一套 RAG 与 Agentic RAG 知识库后端。当前只实现知识索引、混合检索、有界 Agentic 编排和带引用问答，不包含通用聊天、开放式 Agent、支付、图片生成、客服工单或前端。
+把当前可运行的 FBA RAG 基线升级为可量化、可回归、可解释的专业 AI 应用架构项目。近期重点是检索质量、索引一致性、严格测试和可观测性，不是扩大产品范围或增加开放式 Agent。
 
-## 最新实施状态（2026-07-13）
+## 交接契约
 
-第一版核心代码已完成，旧的阶段清单保留为后续增强项，不再表示当前仓库为空。
+本文件是下一位 Agent 开始工作的唯一“现场快照”。每次完成一个可交付切片后，必须更新：完成项及其证据、未验证项、已知风险、工作树注意事项和一个最小的下一步动作。状态含义遵循 `AGENTS.md`：没有可重复证据的实现只能记为 `implemented`，不得写成 `verified`。产品范围由 `docs/PRODUCT.md` 决定，技术契约由 `docs/ARCHITECTURE.md` 决定；本文件不应复制长期设计，也不应保留临时日志或任何敏感内容。
 
-- 已以官方 FBA 模板初始化工程，并注册 `backend/app/rag` 路由。
-- 已实现知识库、文档、切片、查询日志的 Model / CRUD / Service / Schema / API；API 前缀为 `/api/v1/rag`。
-- 已实现本地对象存储、TXT/Markdown/DOCX 解析、配置化切分、确定性上下文化、OpenAI 兼容 Embedding/Chat 适配器与无密钥开发回退。
-- 文档上传快速返回 `PENDING`，Celery `rag_index_document` 负责解析、切片和嵌入；支持状态读取、切片查看、重试和删除。
-- 已实现授权范围内的 pgvector 余弦检索、PostgreSQL 全文检索和 RRF 融合；问答记录 trace、轮数、工具调用数和延迟。
-- 已实现明确终止的 LangGraph 状态图；它不暴露外网、代码执行或写入工具。
-- 已添加 `20260713_0001_rag_core` Alembic 初始迁移，创建 pgvector/FTS/HNSW 索引。
-- 已更新 Docker Compose，使 API 与 Celery Worker 共享本地 RAG 对象卷。
-- 已新增独立 `docker-compose.infra.yml`，用于本地启动 pgvector PostgreSQL 16 与 Redis 7，不依赖缺失的完整 FBA 部署目录。
-- 本地 Docker 已启动 `rag_postgres`（5432，pgvector 0.8.5）与 `rag_redis`（6379）；迁移命令依赖已补全的 `backend/alembic.ini` 配置。
+## 本轮 PDF 文本解析验收矩阵
 
-### 本轮验证
+| 场景 | 预期 |
+|---|---|
+| 文本型 PDF | `parse_document()` 返回按页分隔的正文，进入既有异步索引链路 |
+| 加密 PDF | 解析失败，文档进入 `FAILED`，不尝试绕过密码 |
+| 无文本层/空 PDF | 解析失败，不产生切片或 Embedding 请求 |
+| 超过页数或文本字符上限 | 解析失败，限制资源消耗 |
+| 其他已支持格式 | TXT、Markdown、DOCX 回归不变 |
+| 用户提供的四份简历 PDF | 在本地执行只读解析冒烟，不将正文写入日志或仓库 |
 
-- `python -m compileall -q backend/app/rag backend/app/task/tasks/rag backend/alembic/versions` 通过。
-- `pytest --confcutdir=backend/tests/rag backend/tests/rag/test_chunking.py backend/tests/rag/test_agent.py -q`：4 passed。
-- 已验证 RAG 服务和 Celery 任务模块可导入。
-- 已完成本地端到端验证：JWT 登录、创建知识库、上传 Markdown、Celery 索引至 READY、混合检索、basic/agentic 问答均返回 200；修复了 Worker 文档读取与问答日志事务问题。
-- 已配置并验证 DashScope OpenAI 兼容模型：`text-embedding-v4`（显式 1024 维）和 `qwen-plus`。Worker 的真实 Embedding HTTP 调用返回 200，重建后的 Agentic 问答返回模型生成答案与服务端来源引用。
-- 已补充 `docs/CURRENT_ARCHITECTURE_AND_INTERVIEW.md`，覆盖实际架构、用户管理接口、已验证链路、项目边界与面试问答。
-- 已补充 `docs/LOCAL_DEBUGGING.md`，用于本地 Docker、API/Worker、Swagger、RAG 索引与故障排查。
-- 未执行完整 FBA 集成测试：其根 `backend/conftest.py` 在收集时会启动 FBA App 并连接 Redis；当前沙箱没有可访问的 Redis/PostgreSQL/Docker Compose。
+## 本轮索引任务可靠性验收条件与测试矩阵
 
-### 下一位开发者优先验证
+本轮只处理文档索引任务的有限重试、幂等抢占和卡住恢复，不扩展解析格式、检索策略或 Agent 图。
 
-1. 启动 PostgreSQL（带 pgvector）、Redis 和 Celery 后执行 `cd backend && uv run alembic upgrade head`。
-2. 用真实 JWT 走“创建知识库 → 上传文档 → 等待 READY → retrieve → answer”链路。
-3. 配置生产 Embedding/Chat 模型并确认向量维度与迁移 `vector(1024)` 一致。
-4. 再实现 S3/MinIO 适配器、重排器、真正的多步 Agent 节点和离线评测；这些属于第一版后的质量增强，不能在未评测前默认启用。
+验收条件：
 
-## 已完成
+- `PENDING` 文档只能由当前 `index_version` 的任务抢占为 `PROCESSING`；重复消息不能并发生成重复切片。
+- 解析错误、空文档、HTTP 400 等永久错误直接进入 `FAILED`，不自动重试。
+- 网络超时、连接错误、HTTP 429 和可恢复 5xx 进入 `PENDING` 并按指数退避有限重试；超过上限后进入 `FAILED`。
+- 写入 `error_message` 的内容必须脱敏，不保存模型响应体、密钥、完整文档或请求 URL。
+- 超过配置时限的 `PENDING` 或 `PROCESSING` 文档由 Beat 恢复为 `PENDING` 并重新投递当前版本。
+- 任务重试或恢复不得覆盖 `READY`、`DELETING` 或更新 `index_version` 后的新任务结果。
 
-- [x] 读取参考 Harness：`/Users/leo/Downloads/app/AGENTS.md`。
-- [x] 读取参考产品文档：`/Users/leo/Downloads/app/docs/PRODUCT.md`。
-- [x] 读取参考架构文档：`/Users/leo/Downloads/app/docs/ARCHITECTURE.md`。
-- [x] 读取参考交接文档：`/Users/leo/Downloads/app/session-handoff.md`。
-- [x] 盘点原 RAG 项目的知识库、文档和检索问答能力。
-- [x] 确定使用 FBA 的 API / Service / CRUD / Model 分层。
-- [x] 确定 PostgreSQL + pgvector、Redis、Celery 和 S3 兼容对象存储。
-- [x] 确定 RAG 是 `backend/app/rag` 核心模块，不作为插件。
-- [x] 创建本项目 `AGENTS.md`。
-- [x] 创建 `docs/PRODUCT.md`。
-- [x] 创建 `docs/ARCHITECTURE.md`。
-- [x] 创建 `session-handoff.md`。
-- [x] 调研 LangGraph Agentic RAG、Hybrid RAG、Contextual Retrieval、pgvector 混合检索、GraphRAG、RAG/Agent 评测和 OWASP Agentic 风险的一手资料。
-- [x] 将检索升级为稠密 + PostgreSQL 全文检索 + RRF + 可选 Reranker。
-- [x] 确定上下文化父子切片、严格来源校验和文档提示注入隔离策略。
-- [x] 确定 `basic`、`agentic`、`auto` 三种问答模式及有界 LangGraph 状态图。
-- [x] 确定 Agent 子问题、工具调用、检索轮次、修复次数、Token、成本和超时硬预算。
-- [x] 增加检索、生成、引用、路由、工具调用、质量、延迟和成本评测要求。
+| 层级 | 场景 | 预期证据 |
+|---|---|---|
+| 单元 | HTTP 400、429、5xx、超时、连接错误分类 | 永久/临时错误分类断言 |
+| 单元 | 重试次数与指数退避 | 次数有限，延迟不超过配置上限 |
+| 单元 | 错误摘要脱敏 | 不包含响应体、URL、密钥或原始输入 |
+| Service/CRUD | 当前版本 `PENDING` 抢占 | 状态变为 `PROCESSING` |
+| Service/CRUD | 重复、旧版本、`READY`、`DELETING` 任务 | 不执行索引且不改变终态 |
+| Service/CRUD | 永久失败、临时失败、重试耗尽 | 分别落到 `FAILED`、`PENDING`、`FAILED` |
+| Celery | 临时错误触发 `retry()` | 携带当前异常、有限次数和指数退避 |
+| Celery | 超时 `PENDING/PROCESSING` 修复 | 只重投递超时且未删除的当前版本 |
+| 回归 | 同一消息重复投递 | 不产生重复有效切片 |
 
-## 未完成 / 待处理
+## 本轮真实 Worker/Beat 故障注入验收条件与测试矩阵
 
-### 阶段一：项目基础
+本轮只补齐真实 Redis Broker、Celery Worker 与 Beat 进程下的恢复证据，不扩展解析格式、检索策略或 Agent 图。故障注入使用独立且运行前确认为空的 Redis DB、本地受控模型端点和临时知识库；结束后清理临时数据库记录、对象与 Broker 数据。
 
-- [ ] 使用官方 FBA 当前稳定版本初始化项目。
-- [ ] 固定 Python 和依赖版本，补充锁文件。
-- [ ] 配置 PostgreSQL、pgvector、Redis、Celery 和 MinIO。
-- [ ] 创建 `.env.example`，确认真实密钥被 Git 忽略。
-- [ ] 注册 `backend/app/rag` 路由和模型。
-- [ ] 增加 API、Worker 和依赖服务的健康检查。
+验收条件：
 
-### 阶段二：数据模型和权限
+- 本地模型端点超过配置的 Embedding 超时时间后，真实 Worker 将文档恢复为 `PENDING` 并有限重试；达到 `RAG_INDEX_MAX_RETRIES` 后进入 `FAILED`。
+- 超时与重试耗尽轨迹只能记录文档 ID、状态、时间、任务阶段和脱敏错误摘要，不记录原始正文、密钥、请求 URL 或模型响应体。
+- Worker 在文档处于 `PROCESSING` 时被强制终止后，Broker 可以重投递未确认消息；重复任务不得生成切片或覆盖当前状态。
+- 真实 Beat 的修复任务将超过 `RAG_INDEX_STALE_SECONDS` 的当前版本恢复为 `PENDING` 并重新投递，新 Worker 最终将文档推进到 `READY`。
+- 故障注入运行器默认不执行，只有显式设置 `RAG_RUN_CELERY_FAULT_INJECTION=1` 才能进入集成测试。
 
-- [ ] 创建知识库 Model、Schema、CRUD、Service 和 API。
-- [ ] 创建文档 Model、Schema、CRUD、Service 和 API。
-- [ ] 创建切片与查询日志 Model。
-- [ ] 为切片增加父级关系、上下文化内容、分词文本、`tsvector` 和结构定位元数据。
-- [ ] 创建 pgvector 扩展、全文检索 GIN 索引和初始 Alembic 迁移。
-- [ ] 实现所有者、管理员和公共知识库读取权限。
-- [ ] 补充越权访问测试。
+| 场景 | 预期证据 |
+|---|---|
+| Embedding 端点超时 | 状态轨迹包含 `PENDING -> PROCESSING -> PENDING -> PROCESSING -> FAILED`，错误摘要为脱敏超时信息 |
+| Worker 中断 | 首个 Worker 在 `PROCESSING` 被终止，真实 Beat 记录至少一次恢复，新 Worker 最终写入一个有效切片并进入 `READY` |
+| 幂等与清理 | 中断恢复后只有当前 `index_version` 的有效切片；临时知识库、文档、切片、Outbox、对象与独立 Broker 数据均被清理 |
 
-### 阶段三：文档索引
+## 当前状态（2026-07-21，P0 索引任务可靠性端到端验证完成）
 
-- [ ] 实现 S3/MinIO Storage Adapter。
-- [ ] 实现 TXT、Markdown 和 DOCX Parser。
-- [ ] 实现清洗、切分、重叠和 Token 统计。
-- [ ] 实现标题路径、父子切片、相邻窗口和确定性上下文前缀。
-- [ ] 实现固定版本中文分词与索引/查询一致性测试。
-- [ ] 实现 Embedding Provider 适配器。
-- [ ] 实现 Celery 索引任务、状态机、幂等和有限重试。
-- [ ] 实现状态查询、预览、切片列表、重试和删除清理。
-- [ ] 补充解析、切分、失败和重试测试。
+### `verified`
 
-### 阶段四：检索与问答
+- FBA API 可启动，Swagger 位于 `/docs`。
+- PostgreSQL 16 + pgvector 0.8.5 与 Redis 7 通过本地 Docker 运行。
+- Alembic 初始迁移已创建 `rag_knowledge_base`、`rag_document`、`rag_chunk` 和 `rag_query_log`。
+- JWT 登录、创建知识库、上传 Markdown、Celery 索引到 `READY`、检索和问答完成本地端到端验证。
+- DashScope `text-embedding-v4` 以 1024 维返回 Embedding，`qwen-plus` 返回带 `[S1]` 来源的答案。
+- P0 评测模块实现 JSONL 数据/结果契约和 Recall@5/20、MRR、nDCG@20、引用 Precision/Recall、拒答准确率、P50/P95 指标。
+- `backend/tests/rag/{unit,service,contract,evaluation}` 已建立；当前自动化套件为 42 项通过，另有 1 项需显式启用 PostgreSQL 集成环境。
+- `rag_seed_v0.1.jsonl` 提供 50 条候选审阅样本，覆盖事实、术语、多跳、拒答、越权和提示注入；其状态全为 `pending_human_review`。
+- Golden 评测管道已验证，2 条合成样本除 MRR 为 0.5 外其余当前指标为 1.0；它仅验证流水线，不代表领域效果。
+- GitHub Actions 已配置 Ruff、Mypy、核心测试、Alembic 升级/降级和 Golden 报告 artifact。
+- Alembic `20260714_0002` 的升级、降级、再升级已在本地 PostgreSQL 完成验证。
+- 文档创建和重试会同事务写入 `rag_index_profile` 与 `rag_outbox_event`；`rag_dispatch_outbox` 使用锁定批量投递 Celery，避免事务内直接 `.delay()`。
+- P0 回归覆盖评测阈值、私有/公开读写 SQL 范围、删除补偿、PDF 文本提取/安全拒绝和索引任务可靠性。
+- `run_rag_service_evaluation.py` 可对固定数据库、用户和 `index_profile_hash` 调用真实 `QueryService` 并生成 JSONL；`evaluate_rag.py --thresholds` 可拒绝不满足版本化质量/延迟门槛的报告。
+- 合成 Golden 已通过阈值门禁。其 MRR 为 0.5（拒答样本无相关切片按当前 MRR 定义记 0），不应再表述为“全部指标 1.0”。
+- 文本型 PDF Parser 的单元测试通过：提取正文、拒绝加密、无文本层和错误文件签名。用户提供的四份简历 PDF 均可在本地只读解析。
+- PDF 端到端冒烟已实际调用本地 API、Celery 与 DashScope：4 份简历中 1 份到达 `READY` 并生成 9 个切片，2 份在 Embedding API 返回 HTTP 400 后 `FAILED`，另 1 份在观察窗口内仍为 `PENDING`。临时账号、知识库、文档、切片、Outbox 与对象均已清理。
+- 已修复索引流程未使用 `RAG_EMBEDDING_BATCH_SIZE` 的回归问题，并新增分批 Embedding 单元测试。第二次同语料验证仍有 1 份 HTTP 400、2 份 `PENDING`、1 份 `READY`；因此 PDF 全链路仍不能标记为 `verified`。第二次临时资源也已全部清理。
+- 索引任务可靠性回归已验证：HTTP 400/429/5xx、超时、连接错误分类，错误摘要脱敏，有限指数退避，Celery late acknowledgement，当前版本幂等抢占，以及超时 `PENDING/PROCESSING` 恢复均有自动化断言。
+- RAG 测试命令于 2026-07-20 得到 `42 passed, 1 skipped`；显式启用 PostgreSQL 合约测试后得到 `1 passed`，临时知识库和文档在事务内回滚。该合约测试验证首次抢占、重复任务拒绝和超时恢复。
+- 本轮涉及的 9 个 Python 文件通过 Ruff 与格式检查，4 个业务源文件通过 mypy。
+- 2026-07-21 全 RAG 范围 Ruff 与格式检查通过，Mypy 对 42 个 RAG、任务和配置源码文件检查通过。
+- 核心 RAG 套件于 2026-07-21 得到 `46 passed, 2 skipped`；两个默认跳过项分别需要显式启用 PostgreSQL 与真实 Celery 故障注入环境。
+- Alembic `20260714_0002` 已在专用空 PostgreSQL 数据库验证空库升级、`downgrade -1` 和从 `20260713_0001` 再升级到 head；版本与 6 张 RAG 表核对正确，临时数据库已删除。
+- 真实 Worker/Beat 故障注入合约得到 `1 passed`：受控超时轨迹为 `PENDING -> PROCESSING -> PENDING -> PROCESSING -> FAILED`；Worker 在 `PROCESSING` 被强制终止后由 Beat 恢复并最终进入 `READY`，当前版本只有 1 个有效切片。
+- 故障注入使用独立空闲 Redis DB、受控本地 Embedding 端点和临时业务数据，结束后知识库、文档、切片、Outbox、对象与 Broker 数据均已清理。测试专用 Beat 改用隔离持久调度文件，避免现有 `task_scheduler` 中的无关任务淹没单并发 Worker；对应回归测试已覆盖。
 
-- [ ] 实现授权范围内的 pgvector 余弦检索和 PostgreSQL 全文检索。
-- [ ] 实现 RRF 融合、最低相关度、单文档上限和来源去重。
-- [ ] 实现可插拔 Rerank Provider 及超时降级。
-- [ ] 实现父级/相邻上下文扩展和上下文 Token 预算。
-- [ ] 实现 `/api/v1/rag/retrieve`。
-- [ ] 实现 Chat Provider 适配器与上下文构建。
-- [ ] 实现 `basic` 模式 `/api/v1/rag/answer` 和服务端结构化来源校验。
-- [ ] 实现 LangGraph Typed State、路由、改写/拆解、并行检索和证据分级。
-- [ ] 实现答案事实/引用校验、一次修复、预算停止和安全降级。
-- [ ] 实现 `agentic` 与 `auto` 模式。
-- [ ] 补充上下文不足、模型失败、权限、提示注入和超预算测试。
+### `implemented`（尚未完整 `verified`）
 
-### 阶段五：评测
+- 知识库和文档的所有者、公开读取与管理员权限逻辑。
+- TXT、Markdown、DOCX Parser，本地对象存储和文档重试/删除。
+- pgvector cosine 候选、PostgreSQL FTS 候选与应用层 Reciprocal Rank Fusion（RRF）。
+- HNSW cosine 索引。
+- `basic`、`agentic`、`auto` 请求契约和查询日志。
+- 服务端来源编号与未知引用移除。
+- 删除补偿：删除 API 只标记 `DELETING` 并写 Outbox；异步任务删除对象与关联切片，Beat 定期重投递未完成删除。
+- PDF 支持仅限带可提取文本层；`pypdf` Parser 已接入上传白名单，页数和正文字符数可配置。PDF 上传到 Celery、Embedding、`READY` 的端到端验证仍待补。
 
-- [ ] 创建版本化领域评测集和基础 RAG 基线。
-- [ ] 实现 Recall@K、MRR/nDCG、Context Precision/Recall。
-- [ ] 实现 Faithfulness、Answer Relevancy、正确性和拒答准确率。
-- [ ] 实现 Citation Precision/Recall 与无效引用率。
-- [ ] 实现 Route Accuracy、Tool Call Accuracy、Goal Accuracy 与循环/预算指标。
-- [ ] 对比 `basic` 与 `agentic` 的 P50/P95 延迟、Token、模型调用数和估算成本。
-- [ ] 人工复核关键版本样本，确定 Agentic 默认启用门槛。
+### `planned`
 
-### 阶段六：验收与交付
+- 结构化文档中间表示、标题/页码/表格 provenance、父子切片和相邻窗口。
+- 中文索引/查询一致分词、精确标识符检索与真实 `tsvector` 模型字段。
+- `qwen3-rerank` Adapter、超时降级和质量/成本 A/B。
+- 索引配置版本、蓝绿重建与原子切换。
+- pgvector filtered ANN iterative scan 与精确召回基准。
+- Worker 租约/心跳、Outbox 最大重试/告警和孤儿对象清理。
+- 多节点 LangGraph：结构化路由、查询改写、有限拆解、证据判断和一次修复。
+- OpenTelemetry 节点级轨迹、Token/成本统计和真实服务离线评测 CI。
+- S3/MinIO Adapter 与完整 Docker 部署。
 
-- [ ] Ruff、类型检查和全部测试通过。
-- [ ] 验证 Alembic 空库升级和降级。
-- [ ] 验证完整 RAG 链路。
-- [ ] 验证简单问题走基础路径、复杂问题有界升级、证据不足安全停止。
-- [ ] 验证检索文档中的提示注入无法触发越权或非只读工具。
-- [ ] 验证 Docker Compose 环境。
-- [ ] 编写项目 README 和 API 使用示例。
-- [ ] 更新全部 Harness 文档和本交接文件。
+### `research`
 
-## 未验证
+- Late Chunking。
+- ColBERT 或多向量 Late Interaction。
+- GraphRAG。
+- Docling PDF/表格/版面解析。
+- 多模态知识库与深度研究 Agent。
 
-- [ ] FBA 官方模板是否能在当前机器直接启动。
-- [ ] PostgreSQL 是否已安装 pgvector 扩展。
-- [ ] Redis、Celery 和 MinIO 本地环境是否可用。
-- [ ] 目标模型网关的聊天与 Embedding 模型 ID、维度和配额。
-- [ ] DOCX 样例在限制条件下的解析效果。
-- [ ] 20 MB 文件上限是否满足最终部署网关限制。
-- [ ] 目标 Chat 模型是否稳定支持工具调用和严格结构化输出。
-- [ ] PostgreSQL 中文分词方案在真实语料上的精确术语召回。
-- [ ] Rerank 服务的质量收益、P95 延迟、价格和数据合规要求。
-- [ ] 默认 Agentic 预算能否在 30 秒内覆盖目标复杂问题。
-- [ ] 领域评测集的样本量、人工标注标准和上线阈值。
+研究项只有在固定错误集证明当前流水线存在稳定缺口时才能进入 `planned`。
 
-## 已确定的架构决策
+## 当前代码事实与主要差距
 
-- RAG 为核心应用模块，目录为 `backend/app/rag`。
-- 第一版使用 PostgreSQL + pgvector，不引入独立向量数据库。
-- 文档索引使用 Celery 异步任务，Redis 作为 Broker。
-- 原始文件存储使用 S3 兼容接口，本地开发默认 MinIO。
-- 模型调用通过 OpenAI 兼容适配器，供应商和模型可配置。
-- 第一版问答使用普通 JSON 响应，不承诺 SSE。
-- 第一版只支持 `.txt`、`.md`、`.docx`，单文件默认不超过 20 MB。
-- 第一版不实现通用多轮聊天、前端、支付、图片和工单功能。
-- 默认查询模式为 `auto`：简单问题走 `basic`，复杂或证据不足时进入有界 `agentic`。
-- Agentic 编排使用显式 LangGraph 状态图，不使用无限制 ReAct 循环。
-- 检索使用 pgvector + PostgreSQL 全文检索 + RRF，可选 Reranker 失败时降级。
-- Agent 工具只读且由服务端注入授权知识库范围，不提供外网、代码执行或任意存储访问。
-- 第一版不实现 GraphRAG；只有评测证明全局/关系问题存在稳定缺口时再考虑。
+1. `agent/graph.py` 只有一个 `route` 节点。它是有界状态图骨架，不是真正的多步 Agentic RAG。
+2. `auto` 使用问题长度大于 80 字符的启发式规则，缺少结构化路由和评测。
+3. `split_text()` 按字符和段落切分，`heading_path`、`parent_chunk_id` 与 `location` 没有真实填充。
+4. 词法检索使用 PostgreSQL `simple` 配置，中文问题无法获得稳定分词召回。
+5. RRF 结果没有执行配置中的最低相关度、单文档上限、父级扩展或 Rerank。
+6. `score` 是 RRF 分数，不是可解释概率。API 不应把它描述为统一相关度。
+7. HNSW 已创建，但没有精确检索对照、`ef_search` 调参和 filtered iterative scan 验证。
+8. Outbox 已消除事务内直接投递窗口；索引 Worker 有有限重试和超时恢复，但 Dispatcher 仍无最大重试、退避、死信、可观测告警或 Worker 租约。
+9. 文档删除已使用 `DELETING` + Outbox + Worker 清理对象和切片，并由 Beat 补偿重投；仍缺少孤儿对象扫描、最大重试和告警。
+10. 开发 Embedding 回退在生产配置错误时会掩盖故障，需要按环境 fail closed。
+11. 评测框架、真实 Service 执行器、类型检查和 CI 已建立；50 条业务候选样本尚未人工批准，固定真实报告、领域质量阈值和权限 API 集成测试尚未建立。
 
-## 风险与注意事项
+## 下一步开发顺序
 
-- pgvector 列维度写入迁移后必须和 Embedding 模型一致；更换模型不能只修改环境变量。
-- 对象存储与数据库没有分布式事务，需要补偿删除和孤儿对象清理。
-- Worker 重试必须以 `document_id + index_version` 幂等，防止重复切片。
-- 授权范围必须进入向量 SQL 查询，禁止检索后再做权限过滤。
-- 文档预览、日志和错误信息不能泄露完整私有内容或供应商密钥。
-- DOCX 需要限制解压体积，避免压缩炸弹。
-- 中文 FTS 分词器版本变化会改变召回结果，必须作为索引版本管理并触发重建。
-- 近似向量索引在权限过滤后可能召回不足，必须和精确查询定期对比。
-- 文档是间接提示注入入口，任何检索内容都不能成为系统指令或工具参数来源。
-- LLM Grader 和自我校验可能共同犯错，必须保留服务端引用校验和离线人工评测。
-- Agentic 质量提升会增加延迟和成本，必须保留基础路径和硬预算。
+### P0：测试与可信基线
+
+1. 由领域负责人提供稳定、可脱敏的真实语料，将 50 条候选 JSONL 映射到真实知识库/文档/chunk 并逐条审批；再扩展至 100 条。当前仓库的 `rag_seed_v0.1.jsonl` 是占位数据，不能审批。
+2. 在固定 Docker 数据库与固定 `index_profile_hash` 上运行已实现的 Service 执行器，保存不可伪造的 JSONL results。
+3. 基于审批后真实报告定义并冻结 Recall、MRR/nDCG、引用、拒答与 P95 初始阈值；CI 与上一次已审批基线比较。
+4. 补齐 PostgreSQL/Redis/Celery 集成环境中的 Outbox 重复投递、对象存储失败、权限 API、删除补偿和 PDF 上传至 `READY` 的端到端测试；当前为服务/SQL 契约级回归测试。
+5. 排查 DashScope Embedding 对部分 PDF 提取文本的 HTTP 400：记录脱敏请求长度、批量大小、模型响应类型与失败文档特征；修复后用同一组 PDF 重跑端到端测试，并验证 `PENDING` 任务的 Worker/Beat 投递轨迹。
+
+### P1：检索质量
+
+1. 定义 Parser 输出的结构化中间表示，再实现标题、父子切片、页码和表格定位。
+2. 为中文建立索引与查询一致的词法分析策略，并保留产品编号等精确 Token。
+3. 为 HNSW 查询增加 iterative scan、过滤列索引和 exact-vs-ANN 回归测试。
+4. 实现 Context Builder：来源多样性、父子去重、相邻窗口和 Token 预算。
+5. 接入 `qwen3-rerank`，以 RRF 为降级路径；只有评测通过才默认开启。
+
+### P2：真正的有界 Agentic RAG
+
+1. 用结构化路由替换字符串长度启发式。
+2. 增加查询规范化、最多 3 个子问题和并行只读检索。
+3. 增加证据充分性判断、最多 2 轮检索和一次答案修复。
+4. 对每个节点记录输入摘要、输出 Schema、耗时、Token、停止原因和错误类型。
+5. 对比 `basic` 和 `agentic` 的复杂问题质量、P95、Token 与成本，再决定 `auto` 默认规则。
+
+## Feature 测试门禁
+
+每个 feature 先提交验收条件和测试矩阵。最低门禁如下：
+
+- 单元测试覆盖纯函数、边界和异常。
+- Service/CRUD 测试覆盖事务、副作用、空结果、重复请求和外部失败。
+- API 测试覆盖 Schema、JWT、所有者、公开访问、管理员和越权。
+- Celery 测试覆盖状态机、幂等、有限重试、重复投递与恢复。
+- Alembic 测试覆盖空库升级、现有库升级和至少一次降级。
+- 检索变更报告固定数据集指标、P50/P95 与相对基线变化。
+- 生成/Agent 变更报告 groundedness、引用、拒答、路由、轨迹、Token 和成本。
+- 安全测试覆盖提示注入、恶意文档、未知引用、越权知识库和预算耗尽。
+- Bug 修复必须先添加可复现的回归测试。
+- 只有全部必需门禁通过，状态才能从 `implemented` 改为 `verified`。
+
+## 近期验收命令
+
+当前已验证的核心测试：
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+UV_CACHE_DIR=/private/tmp/rag-service-uv-cache \
+uv run pytest --confcutdir=backend/tests/rag backend/tests/rag -q
+```
+
+索引状态 PostgreSQL 合约测试（临时数据自动回滚）：
+
+```bash
+RAG_RUN_POSTGRES_INTEGRATION=1 \
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+UV_CACHE_DIR=/private/tmp/rag-service-uv-cache \
+uv run pytest --confcutdir=backend/tests/rag \
+  backend/tests/rag/contract/test_index_state_postgresql.py -q
+```
+
+下一轮需要补齐并固定：
+
+```bash
+uv run ruff check backend/app/rag backend/tests/rag
+uv run ruff format --check backend/app/rag backend/tests/rag
+uv run pytest backend/tests/rag -q
+uv run alembic upgrade head
+uv run alembic downgrade -1
+```
+
+P0 新增验证命令：
+
+```bash
+uv run ruff check backend/app/rag/evaluation backend/app/rag/model/index_profile.py backend/app/rag/model/outbox_event.py backend/app/rag/service/index_profile_service.py backend/app/rag/service/outbox_service.py backend/app/task/tasks/rag/tasks.py
+uv run mypy backend/app/rag/evaluation
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest --confcutdir=backend/tests/rag backend/tests/rag -q
+uv run python backend/scripts/evaluate_rag.py \
+  --dataset backend/tests/rag/evaluation/datasets/rag_golden_v0.1.jsonl \
+  --results backend/tests/rag/evaluation/results/rag_golden_v0.1.jsonl \
+  --output artifacts/rag-evaluation.json --require-approved
+```
+
+## 风险
+
+- Embedding 维度与数据库 `vector(1024)` 是强契约，更换模型需要重建索引。
+- HNSW 在知识库权限过滤后可能返回不足候选，必须启用并测试 iterative scan。
+- 文档是间接提示注入入口。检索文本永远不能成为工具参数或系统指令。
+- LLM-as-judge 会与被测模型共享偏差，只能作为人工标注和确定性指标的补充。
+- S3/数据库/Celery 不共享事务，生产前必须实现补偿或 Outbox。
+- Agentic 轮次会放大延迟、成本和攻击面。必须保留 `basic` 路径与硬预算。
+- Celery 的超时重试、重试耗尽、Worker 中断和 Beat 恢复已通过本地真实进程故障注入；Dispatcher 的最大重试、退避、死信、告警和生产数据库调度器的压力验证仍未完成。
+- 全 RAG 范围 Ruff、格式检查与 Mypy 已通过；RAG 范围外的全仓静态门禁本轮未执行，不能据此宣称整个 FBA 仓库无历史问题。
+
+## 文档与研究更新
+
+本轮已更新：
+
+- `AGENTS.md`：增加成熟度标签、Feature 测试门禁和研究项决策规则。
+- `docs/PRODUCT.md`：增加产品成功指标、当前成熟度和 P0/P1/P2/Research 路线图。
+- `docs/ARCHITECTURE.md`：增加当前/目标差异、2026 检索流水线、索引 provenance、测试门禁和 ADR。
+- `session-handoff.md`：移除过时清单，改为当前事实、代码差距和执行顺序。
+
+研究依据包括 Anthropic Contextual Retrieval/Context Engineering、pgvector iterative scan、Qwen3 Embedding/Rerank、LangGraph Agentic RAG、LangSmith/RAGChecker 评测、Docling 结构化解析、Late Chunking、ColBERT、Microsoft GraphRAG 和 OWASP Agentic Top 10 2026。
 
 ## 下一步最佳动作
 
-请下一位开发 Agent 先完整阅读：
-
-1. `AGENTS.md`
-2. `docs/PRODUCT.md`
-3. `docs/ARCHITECTURE.md`
-4. `session-handoff.md`
-
-随后按“最新实施状态”中的验证顺序启动依赖并走完整链路；不要重复初始化 FBA 模板或覆盖现有 RAG 核心模块。
-
-## 本轮变更
-
-- 从参考看板项目的 Harness 结构重建了 RAG 项目文档。
-- 将产品范围收敛到知识库、文档索引、语义检索和带来源问答。
-- 按 FBA 规范定义了目录、分层、事务、响应、权限、配置和测试策略。
-- 明确采用 PostgreSQL + pgvector、Celery + Redis、S3/MinIO 和供应商适配器。
-- 结合当代 RAG 实践补充了上下文化父子切片、混合检索、RRF、可选重排和有界 Agentic RAG。
-- 增加了严格结构化状态、只读工具、硬预算、降级、引用校验与间接提示注入防护。
-- 增加了基础/Agentic 对照评测、检索/生成/引用/Agent 指标和上线门槛。
-- 本轮已完成第一版工程与 RAG 核心实现、初始迁移、异步索引、混合检索、受限 Agent 编排、单元测试和运行说明。
+先完整阅读 `AGENTS.md`、`docs/PRODUCT.md`、`docs/ARCHITECTURE.md` 和本文件。随后完成 P0 的下一纵向切片：排查 DashScope Embedding 对部分 PDF 提取文本返回 HTTP 400 的原因，使用脱敏批次元数据定位失败特征，修复后以同一组 PDF 重跑上传到 `READY` 的端到端测试。不要先扩展 Agent 图。

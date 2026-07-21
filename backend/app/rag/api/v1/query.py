@@ -10,10 +10,22 @@ router = APIRouter(prefix='/rag', tags=['RAG 检索与问答'])
 
 
 @router.post('/retrieve', summary='混合检索知识库', dependencies=[DependsJwtAuth])
-async def retrieve_knowledge(db: CurrentSession, request: Request, obj: RetrieveParam) -> ResponseSchemaModel[list[GetSourceDetail]]:
-    return response_base.success(data=await query_service.retrieve(db=db, user_id=request.user.id, is_admin=bool(request.user.is_superuser), obj=obj))
+async def retrieve_knowledge(
+    db: CurrentSession, request: Request, obj: RetrieveParam
+) -> ResponseSchemaModel[list[GetSourceDetail]]:
+    return response_base.success(
+        data=await query_service.retrieve(
+            db=db, user_id=request.user.id, is_admin=bool(request.user.is_superuser), obj=obj
+        )
+    )
 
 
 @router.post('/answer', summary='基于知识库问答', dependencies=[DependsJwtAuth])
-async def answer_knowledge(db: CurrentSessionTransaction, request: Request, obj: AnswerParam) -> ResponseSchemaModel[GetAnswerDetail]:
-    return response_base.success(data=await query_service.answer(db=db, user_id=request.user.id, is_admin=bool(request.user.is_superuser), obj=obj))
+async def answer_knowledge(
+    db: CurrentSessionTransaction, request: Request, obj: AnswerParam
+) -> ResponseSchemaModel[GetAnswerDetail]:
+    return response_base.success(
+        data=await query_service.answer(
+            db=db, user_id=request.user.id, is_admin=bool(request.user.is_superuser), obj=obj
+        )
+    )

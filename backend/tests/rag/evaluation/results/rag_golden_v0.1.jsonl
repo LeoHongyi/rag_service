@@ -1,0 +1,2 @@
+{"case_id":"golden-001","retrieved_chunk_ids":[101,102],"cited_chunk_ids":[101],"abstained":false,"latency_ms":10.0}
+{"case_id":"golden-002","retrieved_chunk_ids":[],"cited_chunk_ids":[],"abstained":true,"latency_ms":5.0}
