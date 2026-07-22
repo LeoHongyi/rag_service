@@ -17,16 +17,18 @@
 | 能力 | 状态 | 当前实现 |
 |---|---|---|
 | FBA API、JWT、知识库和文档管理 | `verified` | 本地端到端调用通过 |
-| Celery 异步索引 | `verified` | Redis Broker，TXT/Markdown/DOCX；文本型 PDF Parser 已实现并通过本地解析冒烟，完整上传到索引的端到端验证待补 |
+| Celery 异步索引 | `verified` | Redis Broker，TXT/Markdown/DOCX/PDF；4 份文本型 PDF 已通过真实 API、Outbox、Worker、Embedding、检索和问答闭环，4/4 进入 `READY` |
 | 索引任务可靠性 | `verified` | 当前版本行锁抢占、错误分类、有限指数退避、晚确认和超时恢复已实现；Service/CRUD PostgreSQL 与真实 Worker/Beat 故障恢复均已验证 |
 | Embedding 与 Chat | `verified` | DashScope `text-embedding-v4` 1024 维、`qwen-plus` |
 | 混合检索 | `verified` | pgvector 候选、PostgreSQL FTS 候选、应用层 RRF |
 | HNSW | `implemented` | 初始迁移已创建 cosine HNSW；参数与 filtered recall 未基准测试 |
 | Agentic RAG | `implemented` | 单节点 LangGraph，只记录一次有界检索，不包含拆解、证据评分和修复 |
-| 父子切片、中文分词、Rerank | `planned` | Model/配置有预留，业务链路尚未实现 |
+| 父子切片与 Context Builder | `verified` | 父节不参与召回；可选扩展执行同父节去重、来源上限与保守 Token 预算。公开代理集已完成 child/parent 质量、延迟、Token 和成本对比，默认关闭 |
+| 中文分词与精确 Token | `verified` | jieba + PostgreSQL `simple` FTS、受限 OR 查询、`TEXT[]` GIN 精确标识符索引与带权 RRF；公开代理集相对 dense-only 无 Recall/MRR/nDCG 退化 |
+| 可降级 Rerank | `verified` | OpenAI 兼容和 DashScope 协议、用量记录及失败降级已验证；真实 `qwen3-rerank` 在公开代理集质量回退，默认关闭 |
 | Outbox 与删除补偿 | `implemented` | 文档创建/重试/删除在同一事务写入事件；删除先置为 `DELETING`，Worker 清理对象和切片，Beat 重投递未完成删除 |
 | S3/MinIO | `planned` | 当前使用本地文件系统 |
-| 离线质量门禁 | `implemented` | JSONL Schema、真实 Service 执行器、确定性指标、版本化阈值、Golden 报告和 GitHub Actions；领域数据仍待人工审批 |
+| 离线质量门禁 | `verified` | JSONL Schema、真实 Service 执行器、检索/引用/拒答、Token/成本指标及用户批准公开代理集报告已验证；50 到 100 条领域数据仍待负责人审批 |
 | Late Chunking、Late Interaction、GraphRAG | `research` | 评测触发，不进入默认方案 |
 
 ## 技术栈
@@ -250,18 +252,19 @@ backend/
 | `content` | UniversalText | 切片正文 |
 | `contextual_content` | UniversalText | 用于 Embedding 的上下文化文本 |
 | `search_text` | UniversalText | 统一分词后的关键词检索文本 |
-| `text_search` | tsvector | PostgreSQL 全文检索列 |
+| `exact_tokens` | Text[] | 规范化 ASCII 标识符；GIN 精确匹配 |
 | `content_hash` | String(64) | 切片内容哈希 |
 | `parent_chunk_id` | BigInteger, nullable | 父章节或父切片 ID |
+| `is_parent` | Boolean | 父节标记；父节只用于扩展，不参与召回 |
 | `heading_path` | JSON | 标题层级路径 |
 | `location` | JSON | 页码、段落等定位信息 |
 | `char_count` | Integer | 字符数 |
 | `token_count` | Integer | Token 估算或实际值 |
-| `embedding` | vector(N) | pgvector 向量 |
+| `embedding` | vector(N), nullable | pgvector 向量；父节为空 |
 | `index_version` | Integer | 所属索引版本 |
 | `created_time` | TimeZone | 创建时间 |
 
-唯一约束：`document_id + index_version + chunk_index`。向量维度由配置和迁移共同确定，运行时配置不得与数据库列不一致。`text_search` 建立 GIN 索引，`knowledge_base_id`、`document_id` 和 `parent_chunk_id` 建立普通索引。
+唯一约束：`document_id + index_version + chunk_index`。向量维度由配置和迁移共同确定，运行时配置不得与数据库列不一致。`to_tsvector('simple', search_text)` 与 `exact_tokens` 分别建立 GIN 索引，`knowledge_base_id`、`document_id` 和 `parent_chunk_id` 建立普通索引。
 
 ### `rag_query_log`
 
@@ -336,15 +339,16 @@ PENDING / PROCESSING / READY / FAILED -> DELETING -> 删除完成
 ### 关键词召回
 
 - 使用 PostgreSQL `tsvector` + GIN 索引召回精确术语、编号、人名和产品名。
-- 中文文本在索引和查询两侧使用同一固定版本的分词器，结果写入 `search_text` 后使用 `simple` 配置构建 `tsvector`。
+- 中文文本在索引和查询两侧使用同一固定版本的分词器，结果写入 `search_text` 后使用 `simple` 配置构建 `tsvector`；查询使用去标点、去重且最多 16 项的 OR WebSearch 表达式，避免全 Token AND 清空候选。
+- 带 `-`、`.`、`_`、`/`、`:` 的 ASCII 标识符另存入规范化 `exact_tokens TEXT[]`，使用 GIN 数组索引做精确重合匹配，避免 `to_tsvector` 再次拆分连接符。
 - 分词版本属于索引版本的一部分；升级分词器需要重新索引和离线评测。
 
 ### 融合与重排
 
 - 稠密与关键词召回各取 `candidate_k`，默认各 30 条。
-- 使用 Reciprocal Rank Fusion 合并名次，默认 `rrf_k=60`；不直接加总未校准的原始分数。
+- 使用带权 Reciprocal Rank Fusion 合并名次，默认 `rrf_k=60`、dense 权重 `1.0`、lexical 权重 `0.5`；不直接加总未校准的原始分数。
 - 可选 Reranker 对融合后的前 20 条进行 Query-Chunk 相关性重排，再选最终 5 到 10 条。
-- Reranker 超时或失败时降级到 RRF 排序；降级写入 Trace，不阻断请求。
+- Reranker 支持 OpenAI 兼容 `/reranks` 与 DashScope `input/parameters` 协议；超时、HTTP/协议错误或无效索引时降级到 RRF，不阻断请求。当前公开代理集显示 `qwen3-rerank` 质量和延迟均不满足默认启用门槛。
 - 按单文档上限、相邻切片去重和最低得分过滤后，对命中的子切片扩展父章节或相邻窗口。
 - 最终上下文按相关性与来源多样性编排，不简单塞入尽可能多的切片。
 
@@ -668,7 +672,9 @@ RAG_EVAL_DATASET_PATH=backend/tests/fixtures/rag_eval.jsonl
 
 ## 数据库迁移
 
-- 初始迁移启用 `vector` 扩展并创建 RAG 表、`tsvector` 列与 GIN 索引。
+- 初始迁移启用 `vector` 扩展并创建 RAG 表、向量索引与 `to_tsvector('simple', search_text)` 函数 GIN 索引。
+- `20260721_0003` 允许父节不保存向量，并新增 `is_parent` 与父子索引。
+- `20260721_0004` 新增 `exact_tokens TEXT[]` 与 GIN 索引；升级分词配置后必须重建文档索引。
 - Model 变更后使用 `fba alembic revision --autogenerate` 生成迁移并人工审查。
 - 使用 `fba alembic upgrade head` 验证空库升级。
 - pgvector 维度修改必须新建迁移和重建向量，不允许只改环境变量。
@@ -697,6 +703,7 @@ static checks
 - 文本清洗、段落切分、重叠和边界输入。
 - TXT、Markdown、DOCX 解析。
 - 模型适配器成功、超时、限流、错误响应和维度不符。
+- Embedding 批请求 HTTP 400 时二分拆批；单条仍为 HTTP 400 时不得回退为本地向量或吞掉失败。
 - 上下文构建、来源去重与 Token 限制。
 - 中文分词一致性、RRF 融合、父子扩展和 Reranker 降级。
 - Agent 路由、严格结构化输出、状态转移、硬预算与停止条件。

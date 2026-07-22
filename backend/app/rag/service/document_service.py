@@ -2,14 +2,17 @@ import hashlib
 
 from datetime import datetime
 
+import httpx
+
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.rag.adapters.embedding import embedding_provider
 from backend.app.rag.adapters.storage import storage
-from backend.app.rag.chunking import contextualize_chunk, split_text
+from backend.app.rag.chunking import contextualize_chunk, split_parent_child_text
 from backend.app.rag.crud.crud_rag import chunk_dao, document_dao
 from backend.app.rag.enums import DocumentStatus
+from backend.app.rag.lexical import extract_exact_tokens, tokenize_search_text
 from backend.app.rag.model import Chunk, Document
 from backend.app.rag.parsers.text import SUPPORTED_DOCUMENT_SUFFIXES
 from backend.app.rag.service.index_profile_service import get_or_create_index_profile
@@ -21,12 +24,27 @@ from backend.utils.timezone import timezone
 
 
 async def embed_texts_in_batches(*, texts: list[str], batch_size: int) -> list[list[float]]:
-    """按供应商批量上限生成向量，保持输入与输出顺序一致。"""
+    """按供应商批量上限生成向量，保持输入与输出顺序一致。
+
+    个别 OpenAI 兼容 Embedding 网关会因批请求大小或请求体内部校验返回
+    HTTP 400。400 不是常规可重试错误，因此仅在批次包含多段文本时二分拆分；
+    这样既能恢复批级失败，也能让无法被供应商接受的单段文本明确失败。
+    """
     if batch_size < 1:
         raise ValueError('Embedding 批量大小必须大于 0')
+
+    async def embed_batch(batch: list[str]) -> list[list[float]]:
+        try:
+            return await embedding_provider.embed(batch)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 400 or len(batch) == 1:
+                raise
+            midpoint = len(batch) // 2
+            return await embed_batch(batch[:midpoint]) + await embed_batch(batch[midpoint:])
+
     vectors: list[list[float]] = []
     for start in range(0, len(texts), batch_size):
-        vectors.extend(await embedding_provider.embed(texts[start : start + batch_size]))
+        vectors.extend(await embed_batch(texts[start : start + batch_size]))
     return vectors
 
 
@@ -75,11 +93,15 @@ class DocumentService:
 
         document.status = DocumentStatus.PROCESSING
         text = parse_document(filename=document.filename, data=content)
-        pieces = split_text(text, chunk_size=settings.RAG_CHUNK_SIZE, overlap=settings.RAG_CHUNK_OVERLAP)
-        if not pieces:
+        parent_children = split_parent_child_text(
+            text=text, chunk_size=settings.RAG_CHUNK_SIZE, overlap=settings.RAG_CHUNK_OVERLAP
+        )
+        if not parent_children:
             raise ValueError('文档没有可索引正文')
+        children = [(parent, child) for parent in parent_children for child in parent.children]
         contextualized_pieces = [
-            contextualize_chunk(filename=document.filename, heading_path=[], content=item) for item in pieces
+            contextualize_chunk(filename=document.filename, heading_path=parent.heading_path, content=child)
+            for parent, child in children
         ]
         vectors = await embed_texts_in_batches(
             texts=contextualized_pieces,
@@ -87,24 +109,53 @@ class DocumentService:
         )
 
         await db.execute(delete(Chunk).where(Chunk.document_id == document.id))
-        for index, (piece, vector) in enumerate(zip(pieces, vectors, strict=True)):
+        parents: list[Chunk] = []
+        for parent_index, parent in enumerate(parent_children, start=1):
+            parent_chunk = Chunk(
+                knowledge_base_id=document.knowledge_base_id,
+                document_id=document.id,
+                chunk_index=-parent_index,
+                content=parent.parent_content,
+                contextual_content=contextualize_chunk(
+                    filename=document.filename, heading_path=parent.heading_path, content=parent.parent_content
+                ),
+                search_text='',
+                exact_tokens=[],
+                content_hash=hashlib.sha256(parent.parent_content.encode()).hexdigest(),
+                char_count=len(parent.parent_content),
+                token_count=max(len(parent.parent_content) // 4, 1),
+                embedding=None,
+                index_version=document.index_version,
+                is_parent=True,
+                heading_path=parent.heading_path,
+            )
+            db.add(parent_chunk)
+            parents.append(parent_chunk)
+        await db.flush()
+        parent_ids = {id(parent): chunk.id for parent, chunk in zip(parent_children, parents, strict=True)}
+        for index, ((parent, piece), vector) in enumerate(zip(children, vectors, strict=True)):
             db.add(
                 Chunk(
                     knowledge_base_id=document.knowledge_base_id,
                     document_id=document.id,
                     chunk_index=index,
                     content=piece,
-                    contextual_content=contextualize_chunk(filename=document.filename, heading_path=[], content=piece),
-                    search_text=piece,
+                    contextual_content=contextualize_chunk(
+                        filename=document.filename, heading_path=parent.heading_path, content=piece
+                    ),
+                    search_text=tokenize_search_text(contextualized_pieces[index]),
+                    exact_tokens=extract_exact_tokens(contextualized_pieces[index]),
                     content_hash=hashlib.sha256(piece.encode()).hexdigest(),
                     char_count=len(piece),
                     token_count=max(len(piece) // 4, 1),
                     embedding=vector,
                     index_version=document.index_version,
+                    parent_chunk_id=parent_ids[id(parent)],
+                    heading_path=parent.heading_path,
                 )
             )
         document.parsed_content = text
-        document.chunk_count = len(pieces)
+        document.chunk_count = len(children)
         document.status = DocumentStatus.READY
         document.error_message = None
 

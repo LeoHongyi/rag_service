@@ -14,15 +14,15 @@ def build_index_profile_payload() -> dict[str, int | str | None]:
         'parser_name': 'rag.text.parse_document',
         'parser_version': '2',
         'chunker_name': 'rag.chunking.split_text',
-        'chunker_version': '1',
+        'chunker_version': '2-parent-child',
         'chunk_size': settings.RAG_CHUNK_SIZE,
         'chunk_overlap': settings.RAG_CHUNK_OVERLAP,
-        'tokenizer_name': 'character_estimate',
-        'tokenizer_version': '1',
+        'tokenizer_name': 'jieba',
+        'tokenizer_version': '0.42.1-exact-array-v3',
         'embedding_model': settings.RAG_EMBEDDING_MODEL,
         'embedding_dimensions': settings.RAG_EMBEDDING_DIMENSIONS,
         'embedding_instruction': None,
-        'lexical_config': 'postgresql-simple',
+        'lexical_config': 'postgresql-simple-jieba-websearch-or-exact-array-weighted-rrf-v3',
     }
 
 

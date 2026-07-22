@@ -4,6 +4,7 @@ from docx import Document as DocxDocument
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
+from backend.app.rag.chunking import clean_text
 from backend.core.conf import settings
 
 SUPPORTED_DOCUMENT_SUFFIXES = frozenset({'txt', 'md', 'docx', 'pdf'})
@@ -40,10 +41,12 @@ def parse_document(*, filename: str, data: bytes) -> str:
     """解析支持的文本文件"""
     suffix = filename.rsplit('.', 1)[-1].lower()
     if suffix in {'txt', 'md'}:
-        return data.decode('utf-8', errors='replace')
-    if suffix == 'docx':
+        parsed = data.decode('utf-8', errors='replace')
+    elif suffix == 'docx':
         document = DocxDocument(BytesIO(data))
-        return '\n\n'.join(item.text for item in document.paragraphs if item.text.strip())
-    if suffix == 'pdf':
-        return _parse_pdf(data=data)
-    raise ValueError('不支持的文件类型')
+        parsed = '\n\n'.join(item.text for item in document.paragraphs if item.text.strip())
+    elif suffix == 'pdf':
+        parsed = _parse_pdf(data=data)
+    else:
+        raise ValueError('不支持的文件类型')
+    return clean_text(parsed)

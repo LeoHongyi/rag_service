@@ -1,0 +1,57 @@
+{
+  "baseline": {
+    "lexical_rrf_weight": 0.0,
+    "name": "dense-only",
+    "report": {
+      "case_count": 9,
+      "latency_p50_ms": 451.1736669810489,
+      "latency_p95_ms": 1877.5382080348209,
+      "mrr": 1.0,
+      "ndcg_at_20": 1.0,
+      "recall_at_20": 1.0,
+      "recall_at_5": 1.0
+    }
+  },
+  "dataset": "public_rag_v0.1",
+  "hybrid": {
+    "lexical_rrf_weight": 0.5,
+    "name": "dense+jieba+exact-token+weighted-rrf",
+    "report": {
+      "case_count": 9,
+      "latency_p50_ms": 436.5459999535233,
+      "latency_p95_ms": 515.835874946788,
+      "mrr": 1.0,
+      "ndcg_at_20": 1.0,
+      "recall_at_20": 1.0,
+      "recall_at_5": 1.0
+    }
+  },
+  "index_profile_hash": "477acef1d1b5da8655f32d42f4428e3fc0ff5b4f2723a8df90bd5bf4022c5fdf",
+  "exact_token_matches": {
+    "qwen3-rerank": {
+      "count": 6,
+      "chunk_ids": [1038, 1049, 1057, 1068, 1119, 1120]
+    },
+    "text-embedding-v4": {
+      "count": 8,
+      "chunk_ids": [1012, 1037, 1048, 1067, 1068, 1069, 1070, 1071]
+    }
+  },
+  "lexical_candidate_limit": 30,
+  "lexical_candidate_counts": {
+    "public-001": 133,
+    "public-002": 132,
+    "public-003": 130,
+    "public-004": 137,
+    "public-005": 96,
+    "public-006": 133,
+    "public-007": 98,
+    "public-008": 105,
+    "public-009": 61
+  },
+  "retrieval_cost": {
+    "chat_requests_per_run": 0,
+    "embedding_requests_per_run": 9,
+    "rerank_requests_per_run": 0
+  }
+}

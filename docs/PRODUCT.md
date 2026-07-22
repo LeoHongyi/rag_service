@@ -12,9 +12,9 @@ FBA Agentic RAG 知识库服务
 
 ## 当前成熟度
 
-截至 2026-07-21，产品处于可运行基线阶段：知识库、异步文档索引、DashScope Embedding、PostgreSQL 混合检索、带引用问答和单步有界 Agent 路径已经完成端到端验证。索引任务的超时有限重试、重试耗尽、Worker 中断和 Beat 恢复也已在隔离 Redis Broker 与受控模型端点下完成真实进程故障注入验证。
+截至 2026-07-22，产品处于可运行基线阶段：知识库、异步文档索引、DashScope Embedding、PostgreSQL 混合检索、带引用问答和单步有界 Agent 路径已经完成端到端验证。文本型 PDF 的上传、解析、切分、Embedding、检索和带来源问答也已用 4 份本地样本完成真实 API + Outbox + Celery 闭环验证，4/4 文档进入 `READY`。索引任务的超时有限重试、重试耗尽、Worker 中断和 Beat 恢复也已在隔离 Redis Broker 与受控模型端点下完成真实进程故障注入验证。
 
-以下能力仍是目标，不是现状：真正的多步 Agentic RAG、结构感知父子切片、中文词法检索、Rerank 和 S3/MinIO。离线评测框架、索引 provenance、Outbox 和删除补偿已具备最小实现；真实 Service 执行器与合成 Golden 阈值门禁也已实现，但 50 条候选样本仍未绑定真实语料或经领域人工审批，不能对外宣称已经拥有领域质量基线或真实发布阈值。
+父子切片、中文词法检索、精确标识符索引、可降级 Rerank 和有界 Context Builder 已实现，并在用户批准的 3 份公开中文 RAG 文档、9 条问题上完成真实 Service 对比。该小型公开集只用于验证实现与回归：中文混合检索相对 dense-only 无质量退化；父级扩展增加输入 Token 与成本；`qwen3-rerank` 真实调用发生质量回退。因此父级扩展和 Rerank 默认关闭。真正的多步 Agentic RAG、结构化 Parser、S3/MinIO，以及 50 到 100 条由领域负责人审批的业务发布基线仍未完成，不能把公开代理集表述为领域质量门槛。
 
 ## 产品文档使用边界
 
@@ -238,10 +238,10 @@ FBA Agentic RAG 知识库服务
 
 ### P1：提升检索与文档质量
 
-- 引入结构化文档中间表示，保留标题、表格、页码、段落和来源定位。
-- 实现父子切片和相邻窗口扩展；分别保存召回文本与生成上下文。
-- 为中文建立一致的索引/查询分词策略，保留精确标识符检索。
-- 接入 `qwen3-rerank`，只在评测显示收益且 P95/成本可接受时默认启用。
+- `verified`：按 Markdown 标题与 PDF 页标记建立父子切片；可选父级扩展执行同父节去重和 Token 预算。公开代理集 citation precision 从 `0.5963` 到 `0.6426`，但输入 Token 增加约 68%，默认关闭；表格、精确页内位置和相邻窗口仍待完成。
+- `verified`：索引与查询使用同一 jieba 版本；带连接符标识符进入 PostgreSQL `TEXT[]` + GIN 精确索引，OR 查询与带权 RRF 在公开代理集相对 dense-only 的 Recall@5/20、MRR、nDCG 均无退化。
+- `verified`：可降级 OpenAI 兼容及 DashScope Rerank Adapter；真实 `qwen3-rerank` 9 次调用全部成功，但 Recall@5 从 `1.0` 降为 `0.8571`、P50 从约 `405 ms` 增至 `1031 ms`，消耗 `120434` Token、估算成本约 `¥0.060217`，因此保持默认关闭。
+- `planned`：引入结构化文档中间表示，保留标题、表格、页码、段落和来源定位。
 - 配置 pgvector filtered ANN iterative scan，验证权限过滤后的召回完整性。
 
 ### P2：实现可解释的多步 Agentic RAG

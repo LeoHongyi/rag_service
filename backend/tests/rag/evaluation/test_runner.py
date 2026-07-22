@@ -46,3 +46,64 @@ def test_runner_builds_complete_report(tmp_path: Path) -> None:
 def test_approved_gate_rejects_candidate_dataset() -> None:
     with pytest.raises(ValueError, match='尚未人工审批'):
         load_dataset(Path('backend/tests/rag/evaluation/datasets/rag_seed_v0.1.jsonl'), require_approved=True)
+
+
+def test_retrieval_report_excludes_generation_metrics_and_negative_queries(tmp_path: Path) -> None:
+    dataset = tmp_path / 'dataset.jsonl'
+    results = tmp_path / 'results.jsonl'
+    dataset.write_text(
+        '\n'.join([
+            json.dumps({
+                'case_id': 'positive',
+                'question': 'q1',
+                'category': 'fact',
+                'knowledge_base_ids': [1],
+                'relevant_chunk_ids': [2],
+                'relevance': {'2': 2},
+                'expected_citation_chunk_ids': [2],
+                'expected_abstain': False,
+                'review_status': 'approved',
+            }),
+            json.dumps({
+                'case_id': 'negative',
+                'question': 'q2',
+                'category': 'abstention',
+                'knowledge_base_ids': [1],
+                'relevant_chunk_ids': [],
+                'relevance': {},
+                'expected_citation_chunk_ids': [],
+                'expected_abstain': True,
+                'review_status': 'approved',
+            }),
+        ])
+        + '\n',
+        encoding='utf-8',
+    )
+    results.write_text(
+        '\n'.join([
+            json.dumps({
+                'case_id': 'positive',
+                'retrieved_chunk_ids': [2],
+                'cited_chunk_ids': [],
+                'abstained': False,
+                'latency_ms': 5.0,
+                'mode': 'retrieval',
+            }),
+            json.dumps({
+                'case_id': 'negative',
+                'retrieved_chunk_ids': [3],
+                'cited_chunk_ids': [],
+                'abstained': False,
+                'latency_ms': 6.0,
+                'mode': 'retrieval',
+            }),
+        ])
+        + '\n',
+        encoding='utf-8',
+    )
+
+    report = evaluate_files(dataset_path=dataset, results_path=results, require_approved=True)
+
+    assert report['mrr'] == pytest.approx(1.0)
+    assert 'citation_precision' not in report
+    assert 'abstention_accuracy' not in report
