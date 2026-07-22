@@ -40,10 +40,14 @@ class RerankProvider:
         _rerank_usage.set(RerankUsage())
         if not settings.RAG_RERANK_ENABLED:
             return []
-        if not all((settings.RAG_RERANK_BASE_URL, settings.RAG_RERANK_API_KEY, settings.RAG_RERANK_MODEL)):
+        base_url = settings.RAG_RERANK_BASE_URL
+        api_key = settings.RAG_RERANK_API_KEY
+        model = settings.RAG_RERANK_MODEL
+        if not base_url or not api_key or not model:
             raise ValueError('Rerank 已启用但配置不完整')
-        base_url = settings.RAG_RERANK_BASE_URL.rstrip('/')
+        base_url = base_url.rstrip('/')
         top_n = min(len(documents), settings.RAG_RERANK_TOP_N)
+        payload: dict[str, object]
         if settings.RAG_RERANK_PROTOCOL == 'dashscope':
             endpoint = (
                 base_url
@@ -51,19 +55,19 @@ class RerankProvider:
                 else f'{base_url}/services/rerank/text-rerank/text-rerank'
             )
             payload = {
-                'model': settings.RAG_RERANK_MODEL,
+                'model': model,
                 'input': {'query': query, 'documents': documents},
                 'parameters': {'top_n': top_n},
             }
         else:
             endpoint = base_url if base_url.endswith('/reranks') else f'{base_url}/reranks'
             payload = {
-                'model': settings.RAG_RERANK_MODEL,
+                'model': model,
                 'query': query,
                 'documents': documents,
                 'top_n': top_n,
             }
-        headers = {'Authorization': f'Bearer {settings.RAG_RERANK_API_KEY}'}
+        headers = {'Authorization': f'Bearer {api_key}'}
         _rerank_usage.set(RerankUsage(called=True))
         async with httpx.AsyncClient(timeout=settings.RAG_RERANK_TIMEOUT_SECONDS) as client:
             response = await client.post(endpoint, json=payload, headers=headers)

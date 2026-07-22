@@ -4,6 +4,22 @@
 
 把当前可运行的 FBA RAG 基线升级为可量化、可回归、可解释的专业 AI 应用架构项目。近期重点是检索质量、索引一致性、严格测试和可观测性，不是扩大产品范围或增加开放式 Agent。
 
+## PR #1 Rerank Python 3.11 类型修复验收矩阵（2026-07-22）
+
+验收条件：
+
+- GitHub Actions `quality` Job 的 Python 3.11 Mypy 命令可以稳定复现 `RAG_RERANK_BASE_URL` 未收窄和两种协议请求体推断过窄的 3 个错误。
+- Adapter 必须在拼接 URL、Header 和请求体前显式校验并收窄 `base_url`、`api_key`、`model`，不能依赖 `all()` 的跨属性隐式推断。
+- OpenAI 兼容与 DashScope 请求体统一声明为 `dict[str, object]`；运行时字段、降级行为和默认关闭策略不变。
+- 修复后必须通过 CI 原始 Mypy 范围、Ruff、Rerank Adapter 单测和完整 RAG 测试；只有 GitHub Actions 新一轮成功后才把 PR 门禁记为 `verified`。
+
+| 层级 | 场景 | 预期证据 |
+|---|---|---|
+| 静态回归 | Python 3.11 对未修复提交 `2995ad8` 执行 CI Mypy 命令 | `rerank.py:45/63/64` 共 3 个错误 |
+| 类型契约 | Rerank 配置缺失 | 显式抛出既有 `ValueError`，已收窄局部变量不再为 Optional |
+| 单元 | OpenAI 兼容与 DashScope 成功/失败场景 | 请求字段、用量解析和异常语义保持不变 |
+| 全量门禁 | CI 原始 Ruff、Mypy 与 RAG 测试命令 | 本地全部通过；推送后 GitHub Actions `quality` 成功 |
+
 ## 公开评测网页正文提取修复验收矩阵（2026-07-21）
 
 验收条件：
@@ -153,7 +169,8 @@
 - 评测报告位于 `artifacts/public-rag-v0.1.*.json`，真实 Service results 位于 `backend/tests/rag/evaluation/results/public_rag_v0.1*.jsonl`；retrieval-only 报告不再伪造引用/拒答指标，answer 报告只统计答案中实际出现的已知 `[S数字]`。
 - PDF 真实闭环已验证：4 份文本型 PDF 经本地 API、Outbox、Celery Worker 和 DashScope Embedding 后 4/4 进入 `READY`；检索返回 5 个来源，basic 问答状态为 `answered` 并返回 5 个服务端来源。验证只保留计数与状态，不记录简历正文；临时用户和文档均已清理，知识库按软删除契约仅保留无关联数据的墓碑。
 - PDF 失败根因已回归覆盖：其中一份提取文本含 `NUL`，asyncpg 在持久化 `parsed_content` 时拒绝 PostgreSQL UTF-8 文本；所有 Parser 现在复用 `clean_text()` 在持久化前移除 `NUL` 和不可接受控制字符。Embedding HTTP 400 仍保留二分拆批保护，单条失败继续 fail closed。
-- 当前全 RAG 套件为 `70 passed, 2 skipped`；显式 PostgreSQL 状态合约为 `1 passed`。Ruff、格式检查与 Mypy（42 个 RAG 源文件）通过。
+- 当前全 RAG 套件为 `70 passed, 2 skipped`；显式 PostgreSQL 状态合约为 `1 passed`。Ruff、格式检查与 CI 同范围 Mypy（46 个源码文件）通过。
+- PR #1 的 Python 3.11 类型回归已在隔离的 CPython 3.11.14 环境验证：未修复提交 `2995ad8` 的 GitHub Actions 日志稳定报告 `rerank.py:45/63/64` 三个错误；修复后 CI 原始 Mypy 命令为 `Success: no issues found in 46 source files`，Rerank 专项 `5 passed`，全 RAG 套件 `70 passed, 2 skipped`，Alembic 往返与 Golden 阈值命令通过。运行时请求协议和默认开关未改变。
 - Alembic `20260721_0004` 已验证开发现有库 `0003 -> 0004 -> 0003 -> 0004`；专用空库从初始迁移升级到 `0004` 后核对 `exact_tokens` 数组与 GIN 索引，临时数据库已删除。
 
 - FBA API 可启动，Swagger 位于 `/docs`。
@@ -164,13 +181,13 @@
 - P0 评测模块实现 JSONL 数据/结果契约和 Recall@5/20、MRR、nDCG@20、引用 Precision/Recall、拒答准确率、P50/P95 指标。
 - `backend/tests/rag/{unit,service,contract,evaluation}` 已建立；默认套件和需显式启用的 PostgreSQL、真实 Celery 合约分别保留清晰边界。
 - `rag_seed_v0.1.jsonl` 提供 50 条候选审阅样本，覆盖事实、术语、多跳、拒答、越权和提示注入；其状态全为 `pending_human_review`。
-- Golden 评测管道已验证，2 条合成样本除 MRR 为 0.5 外其余当前指标为 1.0；它仅验证流水线，不代表领域效果。
+- Golden 评测管道已验证，2 条合成样本的当前确定性指标均为 1.0；它仅验证流水线，不代表领域效果。
 - GitHub Actions 已配置 Ruff、Mypy、核心测试、Alembic 升级/降级和 Golden 报告 artifact。
 - Alembic `20260714_0002` 的升级、降级、再升级已在本地 PostgreSQL 完成验证。
 - 文档创建和重试会同事务写入 `rag_index_profile` 与 `rag_outbox_event`；`rag_dispatch_outbox` 使用锁定批量投递 Celery，避免事务内直接 `.delay()`。
 - P0 回归覆盖评测阈值、私有/公开读写 SQL 范围、删除补偿、PDF 文本提取/安全拒绝和索引任务可靠性。
 - `run_rag_service_evaluation.py` 可对固定数据库、用户和 `index_profile_hash` 调用真实 `QueryService` 并生成 JSONL；`evaluate_rag.py --thresholds` 可拒绝不满足版本化质量/延迟门槛的报告。
-- 合成 Golden 已通过阈值门禁。其 MRR 为 0.5（拒答样本无相关切片按当前 MRR 定义记 0），不应再表述为“全部指标 1.0”。
+- 合成 Golden 已通过阈值门禁。检索排名指标只统计有相关切片的正样本，拒答样本进入拒答准确率，因此当前 MRR 为 1.0；该口径仍不代表领域质量。
 - 文本型 PDF Parser 的单元测试通过：提取正文、拒绝加密、无文本层、错误文件签名与 `NUL` 清洗。用户提供的四份简历 PDF 均完成真实异步索引闭环，而不再只停留在只读解析冒烟。
 - 历史 PDF 失败先后暴露了 Embedding 批次 HTTP 400 和提取文本 `NUL` 两类独立问题。当前实现分别以 HTTP 400 二分拆批和 Parser 统一文本清洗修复；最终同组 4 份 PDF 已全部 `READY`，历史失败不能再描述为当前状态。
 - 索引任务可靠性回归已验证：HTTP 400/429/5xx、超时、连接错误分类，错误摘要脱敏，有限指数退避，Celery late acknowledgement，当前版本幂等抢占，以及超时 `PENDING/PROCESSING` 恢复均有自动化断言。
