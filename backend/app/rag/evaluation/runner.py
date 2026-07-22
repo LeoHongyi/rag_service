@@ -24,6 +24,16 @@ class EvaluationResult:
     cited_chunk_ids: list[int]
     abstained: bool
     latency_ms: float
+    mode: str = 'answer'
+    rerank_called: bool = False
+    rerank_succeeded: bool = False
+    rerank_tokens: int = 0
+    rerank_cost_cny: float = 0.0
+    chat_called: bool = False
+    chat_succeeded: bool = False
+    chat_prompt_tokens: int = 0
+    chat_completion_tokens: int = 0
+    chat_cost_cny: float = 0.0
 
 
 def load_results(path: Path) -> list[EvaluationResult]:
@@ -39,6 +49,10 @@ def build_report(*, cases: list[EvaluationCase], results: list[EvaluationResult]
     missing = {case.case_id for case in cases} - indexed.keys()
     if missing:
         raise ValueError(f'缺少评测结果: {sorted(missing)}')
+    modes = {result.mode for result in results}
+    if not modes <= {'retrieval', 'answer'} or len(modes) != 1:
+        raise ValueError('评测结果必须使用同一种有效 mode')
+    evaluation_mode = next(iter(modes))
     recall5: list[float] = []
     recall20: list[float] = []
     mrr: list[float] = []
@@ -50,31 +64,46 @@ def build_report(*, cases: list[EvaluationCase], results: list[EvaluationResult]
     for case in cases:
         result = indexed[case.case_id]
         relevant = set(case.relevant_chunk_ids)
-        recall5.append(recall_at_k(ranked_ids=result.retrieved_chunk_ids, relevant_ids=relevant, k=5))
-        recall20.append(recall_at_k(ranked_ids=result.retrieved_chunk_ids, relevant_ids=relevant, k=20))
-        mrr.append(reciprocal_rank(ranked_ids=result.retrieved_chunk_ids, relevant_ids=relevant))
-        ndcg.append(ndcg_at_k(ranked_ids=result.retrieved_chunk_ids, relevance=case.relevance, k=20))
-        precision, recall = set_precision_recall(
-            predicted_ids=result.cited_chunk_ids, expected_ids=case.expected_citation_chunk_ids
-        )
-        citation_precision.append(precision)
-        citation_recall.append(recall)
-        abstention.append(
-            abstention_accuracy(predicted_abstain=result.abstained, expected_abstain=case.expected_abstain)
-        )
+        if relevant:
+            recall5.append(recall_at_k(ranked_ids=result.retrieved_chunk_ids, relevant_ids=relevant, k=5))
+            recall20.append(recall_at_k(ranked_ids=result.retrieved_chunk_ids, relevant_ids=relevant, k=20))
+            mrr.append(reciprocal_rank(ranked_ids=result.retrieved_chunk_ids, relevant_ids=relevant))
+            ndcg.append(ndcg_at_k(ranked_ids=result.retrieved_chunk_ids, relevance=case.relevance, k=20))
+        if evaluation_mode == 'answer':
+            precision, recall = set_precision_recall(
+                predicted_ids=result.cited_chunk_ids, expected_ids=case.expected_citation_chunk_ids
+            )
+            citation_precision.append(precision)
+            citation_recall.append(recall)
+            abstention.append(
+                abstention_accuracy(predicted_abstain=result.abstained, expected_abstain=case.expected_abstain)
+            )
         latency.append(result.latency_ms)
-    return {
+    report: dict[str, float | int] = {
         'case_count': len(cases),
         'recall_at_5': mean(recall5),
         'recall_at_20': mean(recall20),
         'mrr': mean(mrr),
         'ndcg_at_20': mean(ndcg),
-        'citation_precision': mean(citation_precision),
-        'citation_recall': mean(citation_recall),
-        'abstention_accuracy': mean(abstention),
         'latency_p50_ms': percentile(latency, 50),
         'latency_p95_ms': percentile(latency, 95),
+        'rerank_requests': sum(result.rerank_called for result in results),
+        'rerank_successes': sum(result.rerank_succeeded for result in results),
+        'rerank_total_tokens': sum(result.rerank_tokens for result in results),
+        'rerank_cost_cny': sum(result.rerank_cost_cny for result in results),
+        'chat_requests': sum(result.chat_called for result in results),
+        'chat_successes': sum(result.chat_succeeded for result in results),
+        'chat_prompt_tokens': sum(result.chat_prompt_tokens for result in results),
+        'chat_completion_tokens': sum(result.chat_completion_tokens for result in results),
+        'chat_cost_cny': sum(result.chat_cost_cny for result in results),
     }
+    if evaluation_mode == 'answer':
+        report.update({
+            'citation_precision': mean(citation_precision),
+            'citation_recall': mean(citation_recall),
+            'abstention_accuracy': mean(abstention),
+        })
+    return report
 
 
 def evaluate_files(*, dataset_path: Path, results_path: Path, require_approved: bool = False) -> dict[str, float | int]:

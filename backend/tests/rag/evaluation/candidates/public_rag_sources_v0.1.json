@@ -1,0 +1,48 @@
+{
+  "dataset_version": "public-rag-candidates-v0.1",
+  "review_status": "pending_human_review",
+  "purpose": "用于父子切片、中文词法检索和 Rerank 的公开中文技术资料候选；不得直接作为发布质量基线。",
+  "sources": [
+    {
+      "source_id": "aliyun-rag-knowledge-base",
+      "title": "知识库",
+      "url": "https://help.aliyun.com/zh/model-studio/user-guide/rag-knowledge-base/",
+      "publisher": "阿里云帮助中心",
+      "retrieved_on": "2026-07-21",
+      "candidate_questions": [
+        {"id": "public-001", "category": "fact", "question": "百炼知识库支持导入哪些常见文档格式？"},
+        {"id": "public-002", "category": "terminology", "question": "非结构化数据与结构化数据在知识库导入时分别适合哪些场景？"},
+        {"id": "public-003", "category": "abstention", "question": "该页面是否说明了本项目私有知识库的管理员权限实现？"}
+      ]
+    },
+    {
+      "source_id": "aliyun-rag-retrieval",
+      "title": "知识检索",
+      "url": "https://help.aliyun.com/zh/model-studio/rag-knowledge-retrieval",
+      "publisher": "阿里云帮助中心",
+      "retrieved_on": "2026-07-21",
+      "candidate_questions": [
+        {"id": "public-004", "category": "fact", "question": "知识检索服务支持最多联合检索多少个知识库？"},
+        {"id": "public-005", "category": "terminology", "question": "检索流水线中 Query 改写、向量加关键词检索、Rerank 的先后顺序是什么？"},
+        {"id": "public-006", "category": "terminology", "question": "qwen3-rerank 在文档知识库中可用于什么阶段？"}
+      ]
+    },
+    {
+      "source_id": "aliyun-rag-optimization",
+      "title": "RAG效果优化",
+      "url": "https://help.aliyun.com/zh/model-studio/rag-optimization/",
+      "publisher": "阿里云帮助中心",
+      "retrieved_on": "2026-07-21",
+      "candidate_questions": [
+        {"id": "public-007", "category": "fact", "question": "RAG 效果优化文档将流程分为哪三个核心阶段？"},
+        {"id": "public-008", "category": "multi_hop", "question": "为什么在调整检索策略前需要建立评测基线，并应记录哪些结果？"},
+        {"id": "public-009", "category": "abstention", "question": "该页面是否给出了 text-embedding-v4 在本项目中的数据库维度？"}
+      ]
+    }
+  ],
+  "review_requirements": [
+    "确认来源可以被当前项目下载、索引和用于内部评测。",
+    "上传并完成索引后，逐题映射实际 knowledge_base_id、chunk_id、relevance 与引用集合。",
+    "逐题确认拒答预期和审阅人，再生成 review_status=approved 的 JSONL。"
+  ]
+}

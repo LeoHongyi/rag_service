@@ -23,6 +23,7 @@ class GetSourceDetail(SchemaBase):
     chunk_index: int = Field(description='切片序号')
     content: str = Field(description='引用内容')
     score: float = Field(description='相关度')
+    rerank_score: float | None = Field(None, description='重排分数；未启用或降级时为空')
     citation: str = Field(description='引用标识')
 
 

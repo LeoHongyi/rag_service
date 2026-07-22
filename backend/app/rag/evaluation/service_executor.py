@@ -5,11 +5,15 @@ import time
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.rag.adapters.llm import get_chat_usage
+from backend.app.rag.adapters.rerank import get_rerank_usage
+from backend.app.rag.context import extract_cited_chunk_ids
 from backend.app.rag.evaluation.dataset import EvaluationCase
 from backend.app.rag.evaluation.runner import EvaluationResult
 from backend.app.rag.model import Document, IndexProfile
 from backend.app.rag.schema.query import AnswerParam, RetrieveParam
 from backend.app.rag.service.query_service import QueryService
+from backend.core.conf import settings
 
 
 async def assert_index_profile_available(*, db: AsyncSession, profile_hash: str) -> None:
@@ -47,6 +51,7 @@ async def run_service_evaluation(
                 is_admin=is_admin,
                 obj=RetrieveParam(question=case.question, knowledge_base_ids=case.knowledge_base_ids, top_k=20),
             )
+            usage = get_rerank_usage()
             results.append(
                 EvaluationResult(
                     case_id=case.case_id,
@@ -54,6 +59,13 @@ async def run_service_evaluation(
                     cited_chunk_ids=[],
                     abstained=not sources,
                     latency_ms=(time.perf_counter() - started) * 1000,
+                    mode='retrieval',
+                    rerank_called=usage.called,
+                    rerank_succeeded=usage.succeeded,
+                    rerank_tokens=usage.total_tokens,
+                    rerank_cost_cny=(
+                        usage.total_tokens * settings.RAG_RERANK_INPUT_PRICE_PER_MILLION_TOKENS / 1_000_000
+                    ),
                 )
             )
             continue
@@ -68,13 +80,29 @@ async def run_service_evaluation(
                 mode=answer_mode,
             ),
         )
+        usage = get_rerank_usage()
+        chat_usage = get_chat_usage()
         results.append(
             EvaluationResult(
                 case_id=case.case_id,
                 retrieved_chunk_ids=[source.chunk_id for source in answer.sources],
-                cited_chunk_ids=[source.chunk_id for source in answer.sources],
+                cited_chunk_ids=extract_cited_chunk_ids(answer=answer.answer, sources=answer.sources),
                 abstained=answer.status == 'insufficient_evidence',
                 latency_ms=(time.perf_counter() - started) * 1000,
+                mode='answer',
+                rerank_called=usage.called,
+                rerank_succeeded=usage.succeeded,
+                rerank_tokens=usage.total_tokens,
+                rerank_cost_cny=(usage.total_tokens * settings.RAG_RERANK_INPUT_PRICE_PER_MILLION_TOKENS / 1_000_000),
+                chat_called=chat_usage.called,
+                chat_succeeded=chat_usage.succeeded,
+                chat_prompt_tokens=chat_usage.prompt_tokens,
+                chat_completion_tokens=chat_usage.completion_tokens,
+                chat_cost_cny=(
+                    chat_usage.prompt_tokens * settings.RAG_CHAT_INPUT_PRICE_PER_MILLION_TOKENS
+                    + chat_usage.completion_tokens * settings.RAG_CHAT_OUTPUT_PRICE_PER_MILLION_TOKENS
+                )
+                / 1_000_000,
             )
         )
     return results

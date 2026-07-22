@@ -29,3 +29,5 @@ uv run python backend/scripts/evaluate_rag.py \
 ```
 
 `rag_seed_v0.1.jsonl` 是占位审阅队列，不能绑定到实际数据库，也绝不能改为 `approved`。领域负责人必须提供稳定、可脱敏的语料和人工审核结果；随后才能建立真实版本的 JSONL 与质量阈值。
+
+`candidates/public_rag_sources_v0.1.json` 是公开中文技术资料的候选来源及待审问题。它只保存 URL、来源元数据与问题，不保存网页正文；在审阅人确认来源可用于内部评测、上传后映射真实切片并逐题审批之前，不得将其转换为 `approved` JSONL。

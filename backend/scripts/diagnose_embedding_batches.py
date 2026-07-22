@@ -26,6 +26,10 @@ async def diagnose_file(path: Path) -> None:
             'start': start,
             'count': len(batch),
             'max_char_count': max(map(len, batch)),
+            'total_char_count': sum(map(len, batch)),
+            'control_char_count': sum(
+                ord(character) < 32 and character not in {'\\n', '\\t'} for item in batch for character in item
+            ),
         }
         try:
             await embedding_provider.embed(batch)

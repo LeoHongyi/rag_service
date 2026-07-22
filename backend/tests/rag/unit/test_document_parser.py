@@ -21,6 +21,23 @@ def test_pdf_parser_returns_page_delimited_text(monkeypatch: pytest.MonkeyPatch)
     assert text.parse_document(filename='简历.pdf', data=b'%PDF-1.7') == '第 1 页\nPDF 正文'
 
 
+def test_pdf_parser_removes_nul_bytes_before_postgresql_persistence(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Page:
+        def extract_text(self) -> str:
+            return 'PDF\x00正文'
+
+    class Reader:
+        is_encrypted = False
+        pages = [Page()]
+
+    monkeypatch.setattr(text, 'PdfReader', lambda _stream: Reader())
+
+    parsed = text.parse_document(filename='nul.pdf', data=b'%PDF-1.7')
+
+    assert '\x00' not in parsed
+    assert parsed == '第 1 页\nPDF正文'
+
+
 def test_pdf_parser_rejects_encrypted_file() -> None:
     writer = PdfWriter()
     writer.add_blank_page(width=72, height=72)
