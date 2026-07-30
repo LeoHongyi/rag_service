@@ -1,3 +1,4 @@
+import hashlib
 import shutil
 
 from functools import cache
@@ -9,6 +10,24 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 
 from backend.core.path_conf import ENV_EXAMPLE_FILE_PATH, ENV_FILE_PATH
 from backend.plugin.settings_source import PluginSettingsSource
+
+# backend/.env.example 中曾经或当前使用的示例 TOKEN_SECRET_KEY 的 SHA-256 摘要。
+# 两者都已随仓库公开，生产环境使用其中任意一个都意味着 JWT 可被伪造。
+# 此处存摘要而非明文：避免把密钥字面量重新写回源码（会被密钥扫描器判定为泄露），
+# 同时不影响拦截效果——与口令黑名单同理。
+_INSECURE_TOKEN_SECRET_KEY_DIGESTS = frozenset({
+    # 历史上随 .env.example 提交的真实可用密钥
+    'a8ed8bd0486cef6e19c1f5ca484060bf9e79e440480651b79742ce7a10fc3b65',
+    # 当前 .env.example 中的占位符
+    '94242303ea8e469c6ff8c18710ddc5dcaf3d45058351c400af18cdfb9d54614a',
+})
+
+
+def _is_insecure_token_secret_key(value: object) -> bool:
+    """判断密钥是否为已公开的示例值。"""
+    if not isinstance(value, str):
+        return False
+    return hashlib.sha256(value.encode()).hexdigest() in _INSECURE_TOKEN_SECRET_KEY_DIGESTS
 
 
 class Settings(BaseSettings):
@@ -401,6 +420,14 @@ class Settings(BaseSettings):
 
             # Grafana
             values['GRAFANA_METRICS_ENABLE'] = True
+
+            # Token：拒绝已在 .env.example / git 历史中公开的示例密钥，
+            # 避免生产环境签发可被伪造的 JWT
+            if _is_insecure_token_secret_key(values.get('TOKEN_SECRET_KEY')):
+                raise ValueError(
+                    '生产环境检测到 .env.example 的示例 TOKEN_SECRET_KEY，拒绝启动；'
+                    '请生成独立密钥（如 secrets.token_urlsafe(32)）后写入 .env'
+                )
 
         return values
 
