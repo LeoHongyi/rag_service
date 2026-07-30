@@ -1,10 +1,8 @@
 import asyncio
 
-from typing import Any
+from typing import Any, Self
 
 import pytest
-
-from typing_extensions import Self
 
 from backend.app.rag.adapters import embedding
 from backend.common.exception import errors

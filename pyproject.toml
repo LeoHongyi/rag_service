@@ -2,7 +2,7 @@
 name = "fastapi-best-architecture"
 description = "FastAPI 企业级后端架构解决方案"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
   { name = "Wu Clan", email = "jianhengwu0407@gmail.com" },
