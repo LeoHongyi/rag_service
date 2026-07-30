@@ -307,6 +307,8 @@ class Settings(BaseSettings):
     RAG_EMBEDDING_MODEL: str = 'text-embedding-v3'
     RAG_EMBEDDING_DIMENSIONS: int = 1024
     RAG_EMBEDDING_TIMEOUT_SECONDS: float = 30.0
+    # 未配置模型服务时是否允许本地伪向量与占位答案；prod 由 check_env 强制关闭
+    RAG_ALLOW_LOCAL_MODEL_FALLBACK: bool = True
     RAG_CHUNK_SIZE: int = 600
     RAG_CHUNK_OVERLAP: int = 80
     RAG_EMBEDDING_BATCH_SIZE: int = 10
@@ -393,6 +395,9 @@ class Settings(BaseSettings):
 
             # task
             values['CELERY_BROKER'] = 'rabbitmq'
+
+            # RAG：生产环境禁止确定性本地 Embedding 与占位答案回退
+            values['RAG_ALLOW_LOCAL_MODEL_FALLBACK'] = False
 
             # Grafana
             values['GRAFANA_METRICS_ENABLE'] = True

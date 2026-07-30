@@ -7,6 +7,7 @@ import pytest
 from typing_extensions import Self
 
 from backend.app.rag.adapters import llm
+from backend.common.exception import errors
 from backend.core.conf import settings
 
 
@@ -57,3 +58,22 @@ def test_chat_provider_records_actual_usage(monkeypatch: pytest.MonkeyPatch) -> 
         completion_tokens=3,
         total_tokens=15,
     )
+
+
+def test_chat_provider_returns_placeholder_when_fallback_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, 'RAG_ALLOW_LOCAL_MODEL_FALLBACK', True)
+    monkeypatch.setattr(settings, 'RAG_CHAT_BASE_URL', None)
+    monkeypatch.setattr(settings, 'RAG_CHAT_API_KEY', None)
+
+    answer = asyncio.run(llm.ChatProvider().complete(question='问题', context='[S1] 资料'))
+
+    assert answer.startswith('未配置聊天模型')
+
+
+def test_chat_provider_fails_closed_when_fallback_disallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, 'RAG_ALLOW_LOCAL_MODEL_FALLBACK', False)
+    monkeypatch.setattr(settings, 'RAG_CHAT_BASE_URL', None)
+    monkeypatch.setattr(settings, 'RAG_CHAT_API_KEY', None)
+
+    with pytest.raises(errors.ServerError):
+        asyncio.run(llm.ChatProvider().complete(question='问题', context='[S1] 资料'))
