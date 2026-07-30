@@ -201,7 +201,7 @@
 - `public_rag_v0.1` 的 chunk ID 绑定本地隔离数据库；仓库保存来源清单、问题、results 和报告，但未提交公开网页正文或可自动重建的索引快照，因此跨环境复跑前必须按来源清单重新提取、索引并重新核对 ID。
 - 50 条 `rag_seed_v0.1` 业务候选仍为 `pending_human_review`；没有领域负责人提供的脱敏语料和逐条审批，不能把 9 条公开代理集升级为业务发布阈值。
 
-- 知识库和文档的所有者、公开读取与管理员权限逻辑。
+- 知识库和文档的所有者、公开读取与管理员权限逻辑。文档重试与删除已修正为写权限范围：`DocumentService.get` 增加仅关键字 `write` 参数并透传给 `knowledge_base_dao.get_authorized`，`retry` 与 `delete` 以 `write=True` 校验，非所有者对公开知识库的重试/删除由 200 变为 404；`get_list`、`get_chunks` 与文档详情仍为读范围。仍为 `implemented`：回归测试以 fake 替换 `KnowledgeBaseService.get`，只锁定了调用方传参与 DAO 谓词两端，尚未覆盖 Service 到 DAO 的 `write` 透传本身，也没有端到端权限 API 集成测试。
 - TXT、Markdown、DOCX Parser，本地对象存储和文档重试/删除。
 - pgvector cosine 候选、PostgreSQL FTS 候选与应用层 Reciprocal Rank Fusion（RRF）。
 - HNSW cosine 索引。
