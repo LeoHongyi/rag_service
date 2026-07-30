@@ -199,6 +199,8 @@
 ### `implemented`（尚未完整 `verified`）
 
 - 模型回退策略改为 fail-closed：新增 `RAG_ALLOW_LOCAL_MODEL_FALLBACK`（默认 `true`），`Settings.check_env` 在 `ENVIRONMENT=prod` 时强制为 `false`；Embedding 与 Chat 适配器在回退被禁止时抛 `errors.ServerError`，允许回退时记录 WARNING。配置层策略与适配层执行各有单元测试（全量套件 `78 passed, 2 skipped`）。仍为 `implemented`：只有单元级 fake 证据，缺少生产配置下的可重复端到端验证，也未处理历史伪向量切片的标记与重建。
+- `pyproject.toml` 的 `requires-python` 由 `>=3.10` 改为 `>=3.11`，Dockerfile 两处基础镜像同步改为 `python3.11-trixie-slim`（标签已用 `docker manifest inspect` 确认存在），与 `docs/ARCHITECTURE.md` 已声明的 "Python 3.11+" 和代码实际使用的 `enum.StrEnum` 保持一致。`uv.lock` 相应剪除 `<3.11` 死分支（`exceptiongroup`、`tomli` 等 3.10 回填包），逐包比对确认无实际版本变更。仍为 `implemented`：未能实际执行 `docker build`（阻塞于另一个独立缺陷——`deploy/` 目录缺失，需仓库所有者提供）。
+- 生产环境拒绝使用 `.env.example` 中已公开的示例 `TOKEN_SECRET_KEY`：`Settings.check_env` 在 `ENVIRONMENT=prod` 时对当前占位符与历史已提交的真实密钥值均抛出 `ValueError`，拒绝启动；`.env.example` 的占位符本身也已替换为明显不可用的字符串。dev 环境与 `backend/cli.py` 的交互式初始化流程不受影响。已知残留：若生产主机的 `.env` 缺失，`get_settings()` 的自动复制行为会得到 `ENVIRONMENT='dev'` 的 `.env.example`，本检查挂在 `prod` 分支下不会触发——根因是框架级的静默自动复制本身，影响整个 FBA 单体而非仅 RAG 模块，本轮未处理。
 
 - `public_rag_v0.1` 的 chunk ID 绑定本地隔离数据库；仓库保存来源清单、问题、results 和报告，但未提交公开网页正文或可自动重建的索引快照，因此跨环境复跑前必须按来源清单重新提取、索引并重新核对 ID。
 - 50 条 `rag_seed_v0.1` 业务候选仍为 `pending_human_review`；没有领域负责人提供的脱敏语料和逐条审批，不能把 9 条公开代理集升级为业务发布阈值。
