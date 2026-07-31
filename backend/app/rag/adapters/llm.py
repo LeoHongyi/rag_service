@@ -50,7 +50,7 @@ class ChatProvider:
         ]
         headers = {'Authorization': f'Bearer {settings.RAG_CHAT_API_KEY}'}
         _chat_usage.set(ChatUsage(called=True))
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=settings.RAG_CHAT_TIMEOUT_SECONDS) as client:
             response = await client.post(
                 f'{settings.RAG_CHAT_BASE_URL}/chat/completions',
                 json={'model': settings.RAG_CHAT_MODEL, 'messages': messages, 'temperature': 0.1},
@@ -68,7 +68,16 @@ class ChatProvider:
                 total_tokens=int(usage.get('total_tokens', 0)),
             )
         )
-        return body['choices'][0]['message']['content'].strip()
+        # 供应商在触发内容安全策略或返回工具调用时，可能给出合法但没有正文的响应：
+        # choices 为空数组，或 content 为 null。直接下标取值会抛 IndexError/AttributeError，
+        # 表现为一次无法归因的 500，因此这里显式收敛为可识别的服务端错误。
+        choices = body.get('choices') or []
+        if not choices:
+            raise errors.ServerError(msg='聊天模型未返回任何候选回答')
+        content = (choices[0].get('message') or {}).get('content')
+        if not content:
+            raise errors.ServerError(msg='聊天模型返回了空回答')
+        return str(content).strip()
 
 
 chat_provider = ChatProvider()

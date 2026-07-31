@@ -9,7 +9,8 @@ class RetrieveParam(SchemaBase):
     """检索参数"""
 
     question: str = Field(min_length=1, max_length=4000, description='检索问题')
-    knowledge_base_ids: list[int] = Field(min_length=1, description='知识库 ID 列表')
+    # 上限防止单次请求构造超大 SQL IN 子句；50 远超正常跨库检索需求
+    knowledge_base_ids: list[int] = Field(min_length=1, max_length=50, description='知识库 ID 列表')
     top_k: int = Field(5, ge=1, le=20, description='返回数量')
 
 
