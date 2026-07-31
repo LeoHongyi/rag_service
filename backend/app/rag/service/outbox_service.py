@@ -6,7 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.rag.enums import OutboxStatus
+from backend.app.rag.indexing import sanitize_dispatch_error
 from backend.app.rag.model import OutboxEvent
+from backend.common.log import log
 
 INDEX_DOCUMENT_EVENT = 'rag.document.index.requested'
 DELETE_DOCUMENT_EVENT = 'rag.document.delete.requested'
@@ -59,7 +61,11 @@ async def enqueue_document_delete(*, db: AsyncSession, document_id: int) -> Outb
 
 
 async def claim_pending_events(*, db: AsyncSession, limit: int) -> list[OutboxEvent]:
-    """锁定一批待投递事件，支持多个 dispatcher 并发运行。"""
+    """锁定一批待投递事件，支持多个 dispatcher 并发运行。
+
+    只认领 PENDING 与 FAILED；DEAD 与 DISPATCHED 被排除，避免无法成功的事件
+    永久占用每轮固定大小的批次。
+    """
     stmt = (
         select(OutboxEvent)
         .where(OutboxEvent.status.in_([OutboxStatus.PENDING, OutboxStatus.FAILED]))
@@ -78,8 +84,21 @@ def mark_dispatched(*, event: OutboxEvent) -> None:
     event.dispatched_time = datetime.now().astimezone()
 
 
-def mark_failed(*, event: OutboxEvent, exc: Exception) -> None:
-    """保留失败事件供下一次 dispatcher 重试。"""
-    event.status = OutboxStatus.FAILED
+def mark_failed(*, event: OutboxEvent, exc: Exception, max_attempts: int) -> None:
+    """记录投递失败；超过上限后转入 DEAD，不再参与后续认领。
+
+    `dispatch_attempts` 此前只写不读，意味着永远不会成功的事件（载荷损坏、
+    事件类型未知）会每隔一个调度周期被重试一次。由于认领是
+    `ORDER BY id LIMIT n`，这类事件累积到批次容量后会持续挤占名额，
+    使新事件迟迟得不到投递。
+    """
     event.dispatch_attempts += 1
-    event.last_error = str(exc)[:512]
+    event.status = OutboxStatus.DEAD if event.dispatch_attempts >= max_attempts else OutboxStatus.FAILED
+    event.last_error = sanitize_dispatch_error(exc)[:512]
+    if event.status == OutboxStatus.DEAD:
+        log.error(
+            'RAG Outbox 事件投递失败次数达到上限，已转入 DEAD：event_id=%s type=%s attempts=%s',
+            event.id,
+            event.event_type,
+            event.dispatch_attempts,
+        )

@@ -4,9 +4,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 
 def is_retryable_index_error(exc: Exception) -> bool:
-    """判断索引异常是否属于可恢复故障。"""
+    """判断索引异常是否属于可恢复故障。
+
+    401 与 403 视为可恢复：它们几乎总是密钥过期、轮换或配额策略调整导致的
+    环境问题，对所有文档同时生效且由运维修复，而不是某一份文档本身有问题。
+    若判为永久失败，故障窗口内的每份文档都会落到 FAILED 并需要逐个手工重试。
+    """
     if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code in {408, 425, 429} or exc.response.status_code >= 500
+        status_code = exc.response.status_code
+        return status_code in {401, 403, 408, 425, 429} or status_code >= 500
     if isinstance(exc, (httpx.TimeoutException, httpx.TransportError, SQLAlchemyError)):
         return True
     return isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError)
@@ -46,3 +52,17 @@ def sanitize_index_error(exc: Exception) -> str:
     if isinstance(exc, OSError):
         return '对象存储访问失败'
     return f'文档索引失败（{type(exc).__name__}）'
+
+
+def sanitize_dispatch_error(exc: Exception) -> str:
+    """生成不含 Broker 连接串的 Outbox 投递失败摘要。
+
+    Broker URL 内嵌凭据（`amqp://user:password@host`、`redis://:password@host`），
+    而 kombu/redis 的连接异常文本常常直接包含该 URL。因此这里与文档索引路径
+    采用同样的策略：只保留异常类别，绝不写入 `str(exc)`。
+    """
+    if isinstance(exc, (ConnectionError, OSError)):
+        return '任务投递失败：消息中间件连接异常'
+    if isinstance(exc, ValueError):
+        return '任务投递失败：事件类型或载荷不受支持'
+    return f'任务投递失败（{type(exc).__name__}）'

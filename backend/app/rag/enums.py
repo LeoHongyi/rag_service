@@ -21,3 +21,4 @@ class OutboxStatus(StrEnum):
     PENDING = 'PENDING'
     DISPATCHED = 'DISPATCHED'
     FAILED = 'FAILED'
+    DEAD = 'DEAD'
