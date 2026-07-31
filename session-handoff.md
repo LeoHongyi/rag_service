@@ -202,6 +202,7 @@
 
 - `public_rag_v0.1` 的 chunk ID 绑定本地隔离数据库；仓库保存来源清单、问题、results 和报告，但未提交公开网页正文或可自动重建的索引快照，因此跨环境复跑前必须按来源清单重新提取、索引并重新核对 ID。
 - 50 条 `rag_seed_v0.1` 业务候选仍为 `pending_human_review`；没有领域负责人提供的脱敏语料和逐条审批，不能把 9 条公开代理集升级为业务发布阈值。
+- 应用启动阻断已修复：`backend/.gitignore` 的 `log/` 模式未锚定，把源码包 `backend/app/admin/api/v1/log/` 一并忽略，导致该模块从未入库、`backend.app.admin.api.router` 在全新克隆上 `ModuleNotFoundError`。模式改为 `/log/`（仅运行日志目录），并按本仓库同级模块约定（`DependsPagination`/`PageData`、RBAC 权限点、`{code,msg,data}` 信封）重建登录/操作日志 API 三个文件；服务层、CRUD、Model、Schema 均为仓库既有代码，本次只补 API 薄层。仍为 `implemented`：`from backend.main import app` 导入链已本地验证通过，端到端启动证据见后续 E2E 轮次；若所有者保留有原始文件，可直接替换本重建版本。
 
 - 知识库和文档的所有者、公开读取与管理员权限逻辑。文档重试与删除已修正为写权限范围：`DocumentService.get` 增加仅关键字 `write` 参数并透传给 `knowledge_base_dao.get_authorized`，`retry` 与 `delete` 以 `write=True` 校验，非所有者对公开知识库的重试/删除由 200 变为 404；`get_list`、`get_chunks` 与文档详情仍为读范围。仍为 `implemented`：回归测试以 fake 替换 `KnowledgeBaseService.get`，只锁定了调用方传参与 DAO 谓词两端，尚未覆盖 Service 到 DAO 的 `write` 透传本身，也没有端到端权限 API 集成测试。
 - TXT、Markdown、DOCX Parser，本地对象存储和文档重试/删除。

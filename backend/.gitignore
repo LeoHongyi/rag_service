@@ -1,7 +1,9 @@
 __pycache__/
 .env
 data/rag-objects/
-log/
+# 仅匹配 backend/log/ 运行日志目录；不加 `/` 前缀会连源码包
+# backend/app/admin/api/v1/log/ 一并忽略（曾导致该模块从未入库、应用无法启动）
+/log/
 static/media/
 *.log
 celerybeat-schedule.*
