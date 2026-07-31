@@ -208,6 +208,7 @@
 - pgvector cosine 候选、PostgreSQL FTS 候选与应用层 Reciprocal Rank Fusion（RRF）。
 - HNSW cosine 索引。
 - `basic`、`agentic`、`auto` 请求契约和查询日志。
+- 查询路径入参与响应解析加固：`RetrieveParam.knowledge_base_ids` 增加 `max_length=50` 上限（`AnswerParam` 继承同一约束），防止单请求构造超大 SQL `IN` 子句；Chat 适配器把硬编码的 30 秒超时改为 `RAG_CHAT_TIMEOUT_SECONDS` 配置项，并在供应商返回空 `choices` 或空 `content` 时抛出可识别的 `errors.ServerError`（此前直接下标取值会以 IndexError/AttributeError 形式暴露为无法归因的 500）；新增 Service 到 DAO 的 `write` 透传回归用例（变异测试确认删除 `write=write` 时该用例如期失败）。仍为 `implemented`：证据为离线单元测试（schema 校验、mock httpx），未在真实供应商响应上复现空候选场景。
 - 服务端来源编号与未知引用移除。
 - 删除补偿：删除 API 只标记 `DELETING` 并写 Outbox；异步任务删除对象与关联切片，Beat 定期重投递未完成删除。
 - PDF 支持仅限带可提取文本层；`pypdf` Parser 已接入上传白名单，页数和正文字符数可配置，文本型 PDF 上传到 Celery、Embedding、`READY` 的端到端验证已通过。OCR 与复杂版面仍不在当前能力内。
