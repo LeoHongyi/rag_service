@@ -3,6 +3,8 @@ import math
 
 import httpx
 
+from backend.common.exception import errors
+from backend.common.log import log
 from backend.core.conf import settings
 
 
@@ -12,6 +14,10 @@ class EmbeddingProvider:
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """生成文本向量"""
         if not settings.RAG_EMBEDDING_BASE_URL or not settings.RAG_EMBEDDING_API_KEY:
+            if not settings.RAG_ALLOW_LOCAL_MODEL_FALLBACK:
+                raise errors.ServerError(msg='未配置 Embedding 服务，当前环境禁止使用确定性本地伪向量')
+            # 该回退只用于离线开发；索引与检索结果不可信，必须留下可审计痕迹。
+            log.warning('RAG Embedding 未配置，正在使用确定性本地伪向量，检索结果不可信')
             return [self._local_embedding(text) for text in texts]
         payload = {
             'model': settings.RAG_EMBEDDING_MODEL,

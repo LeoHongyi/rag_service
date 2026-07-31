@@ -198,6 +198,8 @@
 
 ### `implemented`（尚未完整 `verified`）
 
+- 模型回退策略改为 fail-closed：新增 `RAG_ALLOW_LOCAL_MODEL_FALLBACK`（默认 `true`），`Settings.check_env` 在 `ENVIRONMENT=prod` 时强制为 `false`；Embedding 与 Chat 适配器在回退被禁止时抛 `errors.ServerError`，允许回退时记录 WARNING。配置层策略与适配层执行各有单元测试（全量套件 `78 passed, 2 skipped`）。仍为 `implemented`：只有单元级 fake 证据，缺少生产配置下的可重复端到端验证，也未处理历史伪向量切片的标记与重建。
+
 - `public_rag_v0.1` 的 chunk ID 绑定本地隔离数据库；仓库保存来源清单、问题、results 和报告，但未提交公开网页正文或可自动重建的索引快照，因此跨环境复跑前必须按来源清单重新提取、索引并重新核对 ID。
 - 50 条 `rag_seed_v0.1` 业务候选仍为 `pending_human_review`；没有领域负责人提供的脱敏语料和逐条审批，不能把 9 条公开代理集升级为业务发布阈值。
 
@@ -241,7 +243,7 @@
 7. HNSW 已创建，但没有精确检索对照、`ef_search` 调参和 filtered iterative scan 验证。
 8. Outbox 已消除事务内直接投递窗口；索引 Worker 有有限重试和超时恢复，但 Dispatcher 仍无最大重试、退避、死信、可观测告警或 Worker 租约。
 9. 文档删除已使用 `DELETING` + Outbox + Worker 清理对象和切片，并由 Beat 补偿重投；仍缺少孤儿对象扫描、最大重试和告警。
-10. 开发 Embedding 回退在生产配置错误时会掩盖故障，需要按环境 fail closed。
+10. 模型回退已由 `RAG_ALLOW_LOCAL_MODEL_FALLBACK` 显式控制，`ENVIRONMENT=prod` 时 `check_env` 强制关闭，未配置即抛 `ServerError`；回退启用时每次调用记录 WARNING。残留风险：`get_settings()` 在缺少 `.env` 时会复制 `ENVIRONMENT='dev'` 的 `.env.example`，因此沿用 dev 配置的生产主机仍会回退，只能靠显式设为 false 与 WARNING 发现；历史上已用伪向量写入的切片没有 provenance 标记，无法定位重建。
 11. 评测框架、公开代理报告、真实 Service 执行器、类型检查和 CI 已建立；50 条业务候选样本尚未人工批准，领域质量阈值和权限 API 集成测试尚未建立。
 
 ## 下一步开发顺序
