@@ -249,8 +249,10 @@ class DocumentService:
         return await document_dao.get_ids_by_status(db, status=DocumentStatus.DELETING)
 
     @staticmethod
-    async def get(*, db: AsyncSession, knowledge_base_id: int, pk: int, user_id: int, is_admin: bool) -> Document:
-        await knowledge_base_service.get(db=db, pk=knowledge_base_id, user_id=user_id, is_admin=is_admin)
+    async def get(
+        *, db: AsyncSession, knowledge_base_id: int, pk: int, user_id: int, is_admin: bool, write: bool = False
+    ) -> Document:
+        await knowledge_base_service.get(db=db, pk=knowledge_base_id, user_id=user_id, is_admin=is_admin, write=write)
         data = await document_dao.get_in_kb(db, pk=pk, knowledge_base_id=knowledge_base_id)
         if not data:
             raise errors.NotFoundError(msg='文档不存在')
@@ -271,7 +273,7 @@ class DocumentService:
     @staticmethod
     async def retry(*, db: AsyncSession, knowledge_base_id: int, pk: int, user_id: int, is_admin: bool) -> Document:
         data = await DocumentService.get(
-            db=db, knowledge_base_id=knowledge_base_id, pk=pk, user_id=user_id, is_admin=is_admin
+            db=db, knowledge_base_id=knowledge_base_id, pk=pk, user_id=user_id, is_admin=is_admin, write=True
         )
         data.status = DocumentStatus.PENDING
         data.error_message = None
@@ -284,7 +286,7 @@ class DocumentService:
     @staticmethod
     async def delete(*, db: AsyncSession, knowledge_base_id: int, pk: int, user_id: int, is_admin: bool) -> None:
         data = await DocumentService.get(
-            db=db, knowledge_base_id=knowledge_base_id, pk=pk, user_id=user_id, is_admin=is_admin
+            db=db, knowledge_base_id=knowledge_base_id, pk=pk, user_id=user_id, is_admin=is_admin, write=True
         )
         data.status = DocumentStatus.DELETING
         await enqueue_document_delete(db=db, document_id=data.id)
