@@ -195,8 +195,7 @@
 - Alembic `20260714_0002` 已在专用空 PostgreSQL 数据库验证空库升级、`downgrade -1` 和从 `20260713_0001` 再升级到 head；版本与 6 张 RAG 表核对正确，临时数据库已删除。
 - 真实 Worker/Beat 故障注入合约得到 `1 passed`：受控超时轨迹为 `PENDING -> PROCESSING -> PENDING -> PROCESSING -> FAILED`；Worker 在 `PROCESSING` 被强制终止后由 Beat 恢复并最终进入 `READY`，当前版本只有 1 个有效切片。
 - 故障注入使用独立空闲 Redis DB、受控本地 Embedding 端点和临时业务数据，结束后知识库、文档、切片、Outbox、对象与 Broker 数据均已清理。测试专用 Beat 改用隔离持久调度文件，避免现有 `task_scheduler` 中的无关任务淹没单并发 Worker；对应回归测试已覆盖。
-
-### `implemented`（尚未完整 `verified`）
+- 真实全链路 E2E 已验证（2026-08-01，连续两次通过，其中一次经 `RAG_RUN_REAL_E2E=1 pytest backend/tests/rag/contract/test_real_rag_e2e.py` 为 `1 passed`，63.5s）：`run_rag_e2e.py` 自行拉起 uvicorn API + Celery Worker/Beat（隔离空闲 Redis Broker DB，`RAG_ALLOW_LOCAL_MODEL_FALLBACK=false` 关闭本地回退），经 HTTP 完成登录 → 建库 → 上传 Markdown → Outbox → Celery → 真实 DashScope Embedding → `READY`（5 切片）→ 混合检索命中目标切片（top score `0.02459`，与加权 RRF 上限分析吻合）→ 真实 `qwen-plus` 两问均正确作答并带 `[S1]` 引用 → 51 个 `knowledge_base_ids` 被 422 拒绝 → 异步删除（Outbox → Worker 行锁路径）完成、知识库删除成功。运行环境为 main 合并 PR #4/#5/#6/#7 的组合（#7 修复启动阻断、#5 提供入参上限）；观察项：库外问题状态仍为 `answered`（无相关度下限缺陷复现，模型自行答复“资料中未提供”）。
 
 - 模型回退策略改为 fail-closed：新增 `RAG_ALLOW_LOCAL_MODEL_FALLBACK`（默认 `true`），`Settings.check_env` 在 `ENVIRONMENT=prod` 时强制为 `false`；Embedding 与 Chat 适配器在回退被禁止时抛 `errors.ServerError`，允许回退时记录 WARNING。配置层策略与适配层执行各有单元测试（全量套件 `78 passed, 2 skipped`）。仍为 `implemented`：只有单元级 fake 证据，缺少生产配置下的可重复端到端验证，也未处理历史伪向量切片的标记与重建。
 - `pyproject.toml` 的 `requires-python` 由 `>=3.10` 改为 `>=3.11`，Dockerfile 两处基础镜像同步改为 `python3.11-trixie-slim`（标签已用 `docker manifest inspect` 确认存在），与 `docs/ARCHITECTURE.md` 已声明的 "Python 3.11+" 和代码实际使用的 `enum.StrEnum` 保持一致。`uv.lock` 相应剪除 `<3.11` 死分支（`exceptiongroup`、`tomli` 等 3.10 回填包），逐包比对确认无实际版本变更。仍为 `implemented`：未能实际执行 `docker build`（阻塞于另一个独立缺陷——`deploy/` 目录缺失，需仓库所有者提供）。
