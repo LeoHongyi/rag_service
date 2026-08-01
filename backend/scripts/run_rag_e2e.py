@@ -198,6 +198,7 @@ class E2EClient:
         self._client = httpx.Client(base_url=base_url, timeout=120)
         self._username = username
         self._password = password
+        self.transient_retries_used = 0
 
     def login(self) -> None:
         # swagger 登录端点以 HTTPBasicCredentials 作为查询依赖（FBA 上游形态），凭据走 query 而非 Basic 头
@@ -211,13 +212,27 @@ class E2EClient:
     def request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         return self._client.request(method, url, **kwargs)
 
-    def data(self, method: str, url: str, **kwargs: Any) -> Any:
-        response = self.request(method, url, **kwargs)
-        response.raise_for_status()
-        body = response.json()
-        if body.get('code') != 200:
-            raise RuntimeError(f'{method} {url} 业务失败：code={body.get("code")} msg={body.get("msg")}')
-        return body.get('data')
+    def data(self, method: str, url: str, *, transient_retries: int = 0, **kwargs: Any) -> Any:
+        """请求并解析 {code,msg,data} 信封。
+
+        transient_retries 只应用于幂等只读请求（检索/问答）：查询路径的供应商调用
+        没有服务端重试，宿主机到 DashScope 的瞬时 TLS 连接失败会以单次 500 暴露；
+        这里的有限重试模拟真实客户端行为，重试次数记入 transient_retries_used，
+        不掩盖失败率。上传与删除等有副作用的请求不得传入该参数。
+        """
+        attempt = 0
+        while True:
+            response = self.request(method, url, **kwargs)
+            if response.status_code >= 500 and attempt < transient_retries:
+                attempt += 1
+                self.transient_retries_used += 1
+                time.sleep(2 * attempt)
+                continue
+            response.raise_for_status()
+            body = response.json()
+            if body.get('code') != 200:
+                raise RuntimeError(f'{method} {url} 业务失败：code={body.get("code")} msg={body.get("msg")}')
+            return body.get('data')
 
     def close(self) -> None:
         self._client.close()
@@ -312,6 +327,7 @@ async def run_e2e(*, username: str = 'admin', password: str = '123456') -> dict[
             sources = client.data(
                 'POST',
                 '/api/v1/rag/retrieve',
+                transient_retries=2,
                 json={'question': QUESTION_PORT, 'knowledge_base_ids': [kb_id], 'top_k': 5},
             )
             report['retrieve_source_count'] = len(sources)
@@ -321,6 +337,7 @@ async def run_e2e(*, username: str = 'admin', password: str = '123456') -> dict[
             answer = client.data(
                 'POST',
                 '/api/v1/rag/answer',
+                transient_retries=2,
                 json={'question': QUESTION_PORT, 'knowledge_base_ids': [kb_id], 'top_k': 5, 'mode': 'basic'},
             )
             report['answer_status'] = answer['status']
@@ -331,6 +348,7 @@ async def run_e2e(*, username: str = 'admin', password: str = '123456') -> dict[
             answer_snapshot = client.data(
                 'POST',
                 '/api/v1/rag/answer',
+                transient_retries=2,
                 json={'question': QUESTION_SNAPSHOT, 'knowledge_base_ids': [kb_id], 'top_k': 5, 'mode': 'basic'},
             )
             report['answer2_status'] = answer_snapshot['status']
@@ -341,6 +359,7 @@ async def run_e2e(*, username: str = 'admin', password: str = '123456') -> dict[
             out_of_scope = client.data(
                 'POST',
                 '/api/v1/rag/answer',
+                transient_retries=2,
                 json={'question': QUESTION_OUT_OF_SCOPE, 'knowledge_base_ids': [kb_id], 'top_k': 5, 'mode': 'basic'},
             )
             report['observations']['out_of_scope_status'] = out_of_scope['status']
@@ -361,6 +380,7 @@ async def run_e2e(*, username: str = 'admin', password: str = '123456') -> dict[
             kb_delete = client.request('DELETE', f'/api/v1/rag/knowledge-bases/{kb_id}')
             report['kb_delete_accepted'] = kb_delete.status_code == 200
             kb_id = None
+            report['transient_retries_used'] = client.transient_retries_used
             return report
         finally:
             if client is not None and kb_id is not None:
