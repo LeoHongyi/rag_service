@@ -1,10 +1,8 @@
 import asyncio
 
-from typing import Any
+from typing import Any, Self
 
 import pytest
-
-from typing_extensions import Self
 
 from backend.app.rag.adapters import rerank
 from backend.core.conf import settings
