@@ -336,6 +336,8 @@ class Settings(BaseSettings):
     RAG_INDEX_RETRY_BACKOFF_MAX_SECONDS: int = 60
     RAG_INDEX_STALE_SECONDS: int = 900
     RAG_OUTBOX_DISPATCH_INTERVAL_SECONDS: int = 5
+    # 投递失败达到该次数后事件转入 DEAD，不再参与认领，避免挤占固定批次
+    RAG_OUTBOX_MAX_DISPATCH_ATTEMPTS: int = 10
     RAG_REPAIR_INTERVAL_SECONDS: int = 60
     RAG_MAX_FILE_SIZE: int = 20 * 1024 * 1024
     RAG_PDF_MAX_PAGES: int = 100

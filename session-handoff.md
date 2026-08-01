@@ -214,6 +214,7 @@
 - 服务端来源编号与未知引用移除。
 - 删除补偿：删除 API 只标记 `DELETING` 并写 Outbox；异步任务删除对象与关联切片，Beat 定期重投递未完成删除。
 - PDF 支持仅限带可提取文本层；`pypdf` Parser 已接入上传白名单，页数和正文字符数可配置，文本型 PDF 上传到 Celery、Embedding、`READY` 的端到端验证已通过。OCR 与复杂版面仍不在当前能力内。
+- Outbox 投递失败治理与删除任务并发防护：`OutboxStatus` 新增 `DEAD` 终态，`mark_failed` 在 `dispatch_attempts` 达到 `RAG_OUTBOX_MAX_DISPATCH_ATTEMPTS`（默认 10）后转入 `DEAD` 并停止认领，避免永远无法成功的事件挤占 `ORDER BY id LIMIT n` 的固定认领批次；投递失败摘要经 `sanitize_dispatch_error` 脱敏，不再把可能内嵌 Broker 凭据的 `str(exc)` 写入 `last_error`；Embedding HTTP 401/403 改判为可重试（密钥轮换与配额调整属环境故障而非文档故障）；`delete_document` 对文档行加 `FOR UPDATE` 锁，避免 Beat 补偿与原始投递并发双删触发 `StaleDataError` 假告警。仍为 `implemented`：证据为离线单元测试（`test_outbox_dispatch_policy.py` 等），未在真实 Broker 故障与并发删除场景端到端复现。
 
 ### `planned`
 

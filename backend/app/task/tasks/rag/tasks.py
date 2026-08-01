@@ -35,7 +35,7 @@ def _dispatch_event(event: OutboxEvent) -> None:
             raise ValueError(f'不支持的 Outbox 事件类型: {event.event_type}')
         mark_dispatched(event=event)
     except Exception as exc:
-        mark_failed(event=event, exc=exc)
+        mark_failed(event=event, exc=exc, max_attempts=settings.RAG_OUTBOX_MAX_DISPATCH_ATTEMPTS)
 
 
 @celery_app.task(
@@ -94,7 +94,12 @@ async def index_document(task: Task, document_id: int, index_version: int | None
 async def delete_document(document_id: int) -> str:
     """异步清理原始对象和切片；重复投递安全且失败后保持 DELETING。"""
     async with async_db_session.begin() as db:
-        document = await db.scalar(select(Document).where(Document.id == document_id, Document.deleted == 0))
+        # 取行锁：Beat 的补偿投递、Outbox 原始投递与 OSError 自动重试都可能同时到达。
+        # 无锁时两个任务会双双通过 DELETING 检查并各自执行硬删除，落后的一方
+        # 因删除 0 行而抛 StaleDataError，产生虚假的任务失败告警。
+        document = await db.scalar(
+            select(Document).where(Document.id == document_id, Document.deleted == 0).with_for_update()
+        )
         if not document:
             return 'document_not_found'
         if document.status != DocumentStatus.DELETING:
