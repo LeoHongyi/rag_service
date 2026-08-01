@@ -197,3 +197,26 @@ def test_document_delete_denied_by_knowledge_base_scope_has_no_side_effects(monk
 
     assert document.status == DocumentStatus.FAILED
     assert queued == []
+
+
+def test_knowledge_base_service_forwards_write_scope_to_dao(monkeypatch: MonkeyPatch) -> None:
+    """锁定 Service 到 DAO 的 write 透传这一根线。
+
+    其余权限测试都以 fake 替换了 KnowledgeBaseService.get，因此若
+    knowledge_base_service.py 中的 `write=write` 被删除，那些测试仍然全绿
+    （已由变异测试证实）。本用例直接调用真实 Service，只替换 DAO，
+    确保这条“接线”本身有回归覆盖。
+    """
+    captured: list[dict[str, Any]] = []
+
+    async def fake_get_authorized(_db: Any, **kwargs: Any) -> SimpleNamespace:
+        await asyncio.sleep(0)
+        captured.append(kwargs)
+        return SimpleNamespace(id=3)
+
+    monkeypatch.setattr(knowledge_base_dao, 'get_authorized', fake_get_authorized)
+
+    asyncio.run(KnowledgeBaseService.get(db=object(), pk=3, user_id=1, is_admin=False, write=True))
+    asyncio.run(KnowledgeBaseService.get(db=object(), pk=3, user_id=1, is_admin=False))
+
+    assert [scope['write'] for scope in captured] == [True, False]

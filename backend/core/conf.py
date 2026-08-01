@@ -321,6 +321,7 @@ class Settings(BaseSettings):
     RAG_CHAT_BASE_URL: str | None = None
     RAG_CHAT_API_KEY: str | None = None
     RAG_CHAT_MODEL: str = 'qwen-plus'
+    RAG_CHAT_TIMEOUT_SECONDS: float = 30.0
     RAG_EMBEDDING_BASE_URL: str | None = None
     RAG_EMBEDDING_API_KEY: str | None = None
     RAG_EMBEDDING_MODEL: str = 'text-embedding-v3'
